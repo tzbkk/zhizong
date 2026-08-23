@@ -1,0 +1,237 @@
+SchemaVersion: 1
+Type: version
+Name: 1
+Description: >-
+  契约文档格式第 1 代,也是该格式的唯一定义源。contracts/ 下每一份文档——
+  包括本文档自身——都必须通过 Definition.Shapes 的校验。本文档不可变:
+  任何格式变更必须新开 Name: 2 的 version 文档,由各文档经 SchemaVersion
+  字段显式声明所循代次。强制力全部落在两层机器结构上:Shapes(JSON Schema
+  2020-12,单文档形状)与 Invariants(编号规则,跨文档不变量);Semantics
+  为非规范人读层,不承担强制力。
+
+Definition:
+
+  Shapes:
+    Document:
+      type: object
+      additionalProperties: false
+      required: [SchemaVersion, Type, Name, Description]
+      properties:
+        SchemaVersion: {type: integer, minimum: 1}
+        Type: {enum: [structure, component, version]}
+        Name: {}
+        Description: {type: string, minLength: 1}
+        Location: {type: string, pattern: '^(file|http|urn):'}
+        Parameters:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: false
+            required: [Type]
+            properties:
+              Type: {type: string, minLength: 1}
+        Lifecycle: {enum: [append-only, rewrite-in-place, transient, generated]}
+        Definition: {type: object}
+        ComponentType: {enum: [daemon, service, cli, tui, library, ci]}
+        Upstream: {$ref: '#/$defs/IoMap'}
+        Downstream: {$ref: '#/$defs/IoMap'}
+        Binds: {type: string, pattern: '^[A-Za-z0-9.\-]+:[0-9]+$'}
+        Provides: {type: string, minLength: 1}
+        Runs: {type: string, minLength: 1}
+        role: {const: entrypoint}
+      allOf:
+        - if: {properties: {Type: {const: version}}, required: [Type]}
+          then:
+            properties:
+              Name: {type: integer, minimum: 1}
+              Definition: {type: object}
+        - if: {properties: {Type: {const: structure}}, required: [Type]}
+          then:
+            required: [Location, Definition]
+            properties:
+              Name: {type: string, minLength: 1}
+              Definition:
+                type: object
+                additionalProperties: false
+                required: [Form]
+                properties:
+                  Form: {enum: [record, grammar, scalar]}
+                  Table: {type: array, minItems: 1, items: {$ref: '#/$defs/FieldItem'}}
+                  Productions: {type: string, minLength: 1}
+                  Base: {enum: [string, integer, number, boolean]}
+                  Pattern: {type: string, minLength: 1}
+                allOf:
+                  - if: {properties: {Form: {const: record}}, required: [Form]}
+                    then:
+                      required: [Table]
+                      properties: {Productions: false, Base: false, Pattern: false}
+                  - if: {properties: {Form: {const: grammar}}, required: [Form]}
+                    then:
+                      required: [Productions]
+                      properties: {Table: false, Base: false, Pattern: false}
+                  - if: {properties: {Form: {const: scalar}}, required: [Form]}
+                    then:
+                      required: [Base, Pattern]
+                      properties: {Table: false, Productions: false}
+        - if: {properties: {Type: {const: component}}, required: [Type]}
+          then:
+            required: [ComponentType, Upstream, Downstream]
+            properties:
+              Name: {type: string, minLength: 1}
+            allOf:
+              - if: {properties: {ComponentType: {const: service}}, required: [ComponentType]}
+                then: {required: [Binds, Provides]}
+                else: {properties: {Binds: false, Provides: false}}
+              - if:
+                  properties: {ComponentType: {enum: [daemon, service, cli, tui, ci]}}
+                  required: [ComponentType]
+                then: {required: [Runs]}
+                else: {properties: {Runs: false, role: false}}
+      $defs:
+        FieldItem:
+          type: object
+          additionalProperties: false
+          required: [Field, Type, Description]
+          properties:
+            Field: {type: string, minLength: 1}
+            Type: {type: string, minLength: 1}
+            Required: {type: boolean}
+            Description: {type: string, minLength: 1}
+            Fields: {type: array, minItems: 1, items: {$ref: '#/$defs/FieldItem'}}
+        IoMap:
+          type: object
+          additionalProperties:
+            type: array
+            items: {type: string, minLength: 1}
+
+  Invariants:
+    - Id: R01
+      OnViolation: fail
+      Scope: component × component
+      Statement: "A.Upstream[S] 含节点 B 时,B.Downstream[S] 必含 A;反之亦然"
+    - Id: R02
+      OnViolation: fail
+      Scope: component
+      Statement: "I/O 图中组件名节点必须是库中存在的组件;external: 源名必须登记于 <contracts_root>/externals.yaml"
+    - Id: R03
+      OnViolation: fail
+      Scope: component × structure
+      Statement: "每个 Upstream 键 S:值为空列表(对端为文件)合法;否则必须存在组件 X 使 X.Downstream[S] 含本组件"
+    - Id: R04
+      OnViolation: fail
+      Scope: structure
+      Statement: "未被任何组件 I/O 键或 Parameters.Type 引用的结构文档无效;被 Parameters.Type 引用的标量豁免"
+    - Id: R05
+      OnViolation: fail
+      Scope: component
+      Statement: "无任何边的组件必须标 role: entrypoint,否则无效"
+    - Id: R06
+      OnViolation: fail
+      Scope: structure × structure
+      Statement: "Location 模板展开后全局唯一"
+    - Id: R07
+      OnViolation: fail
+      Scope: structure × component
+      Statement: "Location 为 http 时,host:port 必须命中恰一个 service 的 Binds,path 必须在该 service 的 Provides 规格 paths 内"
+    - Id: R08
+      OnViolation: fail
+      Scope: structure
+      Statement: "Location 中每个模板变量必须在 Parameters 声明;Parameters 每个声明必须出现在 Location 中"
+    - Id: R09
+      OnViolation: fail
+      Scope: structure × structure
+      Statement: "Parameters.Type 引用的结构文档必须存在且 Definition.Form 为 scalar"
+    - Id: R10
+      OnViolation: fail
+      Scope: structure
+      Statement: "Form 为 scalar 的结构,Location 必须等于 urn:<namespace>:type:<Name>"
+    - Id: R11
+      OnViolation: fail
+      Scope: system
+      Statement: "fixture 数据树上,实际文件必须命中某 file Location 展开,且每个 file Location 展开必须存在对应文件"
+    - Id: R12
+      OnViolation: fail
+      Scope: system
+      Statement: "真实数据树上,实际文件必须命中某 file Location 展开;声明 Location 缺失且 Lifecycle 非 generated 时告警"
+    - Id: R13
+      OnViolation: fail
+      Scope: structure
+      Statement: "Location 为 file 或 http 的结构,<contracts_root>/samples/<Name>.valid.<ext> 与 .invalid.<ext> 必须成对存在;urn 豁免"
+    - Id: R14
+      OnViolation: fail
+      Scope: structure
+      Statement: "valid 样本逐条必须通过该结构字段表编译出的 JSON Schema"
+    - Id: R15
+      OnViolation: fail
+      Scope: structure
+      Statement: "invalid 样本逐条必须被该结构字段表编译出的 JSON Schema 拒绝"
+    - Id: R16
+      OnViolation: fail
+      Scope: document × version
+      Statement: "每份文档的 SchemaVersion 必须命中某 version 文档的 Name"
+    - Id: R17
+      OnViolation: fail
+      Scope: document
+      Statement: "Name 库内唯一;version 代次号不重复"
+    - Id: R18
+      OnViolation: fail
+      Scope: meta
+      Statement: "校验器实现的规则 ID 集合必须与本 Invariants 的 ID 集合严格相等"
+    - Id: R19
+      OnViolation: fail
+      Scope: meta
+      Statement: "本文档必须通过 Definition.Shapes.Document 对自身的校验"
+    - Id: R20
+      OnViolation: fail
+      Scope: document × component
+      Statement: "结构文档作为 I/O 键被引用时,其 Name 必须与键一致且文档存在"
+
+  Semantics:
+    Normative: false
+    TypeVocab:
+      string: 长度不限的字符串
+      integer: JSON 整数
+      number: JSON 数值(含整数)
+      boolean: true/false
+      object: JSON 对象;带 Fields 为展开定义,不带视为不透明,不透明须在字段 Description 说明理由
+      "array<类型>": 元素类型为尖括号内类型的数组,如 array<object>
+      结构名引用: 引用另一结构文档;scalar引用按其Base+Pattern编译
+    FieldTableCompilation:
+      Note: record字段表由校验器编译为JSON Schema执行样本验证,映射如下
+      Rules:
+        - "基础类型直映: string→string, integer→integer, number→number, boolean→boolean"
+        - "object带Fields→{type: object, properties: 嵌套编译, additionalProperties: true}"
+        - "additionalProperties 恒为 true——契约只声明已依赖字段,信源(QQ上游)携带的未知字段不判非法"
+        - "object不带Fields→{type: object}"
+        - "array<T>→{type: array, items: T的编译产物}"
+        - "Required=true 的字段进 required 列表;缺省视为可选"
+        - "scalar结构名引用→{type: Base, pattern: Pattern}"
+        - "record结构名引用→其编译产物按 $ref 注入"
+    NodeSyntax:
+      Kind: [组件名, "external:源名"]
+      EmptyList: 值为空列表表示对端为文件本身——结构经自身Location落盘/读回,无进程对端
+    Lifecycle:
+      append-only: 只追加(feeds.jsonl类);增量归档切片依赖此语义
+      rewrite-in-place: 整文件重写
+      transient: 临时态,存在即活动(prometheus.lock)
+      generated: 工具产物,磁盘缺失不告警(archives/)
+    Samples:
+      Extensions: "*.jsonl→每行一条JSON;非JSONL文本行→.txt;http报文→.json单对象"
+      Paths: <contracts_root>/samples/<Name>.valid.<ext> 与 <contracts_root>/samples/<Name>.invalid.<ext>
+    ExternalsRegistry:
+      Path: <contracts_root>/externals.yaml
+      Shape: "{源名: {Kind: 上游形态, Origin: URL或标记, Description: string}}"
+    Evolution:
+      AppliesTo: structure文档
+      Motives:
+        - 追加可选字段自由——存量数据自动合规
+        - 追加必填字段禁止——存量61k记录无法回填
+        - 类型收窄禁止/放宽允许——只许让更多数据合法
+        - 破坏性变更新开文档,旧文档冻结不删除——迁移是显式工程动作
+        - 格式换代新开version文档——见Definition.Version不变性
+    Bootstrap:
+      Note: 校验器加载本文档后第一步即用Shapes.Document验证本文档;这是体系的地基,失败则一切无效
+    Effectivity:
+      Draft: 未提交、零引用、无校验器执行——修改自由,代次机制不适用(为无效力草稿走代次流程是过度仪式)
+      Effective: 首次提交 contracts/ 且校验器进入 CI 的时点——此后本文档冻结,格式变更必须新开代次,演进铁律全面接管
+      Test: 判断效力时点的方法:改动需要走代次吗?若 contracts/ 尚未入库生效,答案恒为否
