@@ -1,6 +1,7 @@
-import yaml
-import jsonschema
 import importlib.resources
+
+import jsonschema
+import yaml
 
 
 def test_bootstrap_self_validation():

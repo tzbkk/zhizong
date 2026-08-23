@@ -15,6 +15,7 @@ def run_cli(cwd, *args):
         cwd=cwd,
         capture_output=True,
         text=True,
+        check=False,
     )
 
 

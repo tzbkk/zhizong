@@ -2,11 +2,6 @@
 
 import pytest
 
-import zhizong.disk  # noqa: F401 -- importing registers R11/R12/R18
-import zhizong.graph  # noqa: F401 -- importing registers R01-R05/R17/R20
-import zhizong.location  # noqa: F401 -- importing registers R06-R10
-import zhizong.samples  # noqa: F401 -- importing registers R13-R15
-import zhizong.shapes  # noqa: F401 -- importing registers R16/R19
 from zhizong.registry import (
     RegistryError,
     Violation,

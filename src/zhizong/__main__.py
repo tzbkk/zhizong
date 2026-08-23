@@ -28,7 +28,7 @@ import zhizong
 from zhizong import disk, graph, location, samples, shapes  # noqa: F401
 from zhizong.config import ConfigError, load_config
 from zhizong.loader import Corpus, load_corpus
-from zhizong.registry import Violation, _RULES
+from zhizong.registry import _RULES, Violation
 
 EXIT_OK = 0
 EXIT_VIOLATIONS = 1

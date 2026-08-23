@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import functools
 import importlib.resources
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Literal
+from typing import TYPE_CHECKING, Literal
 
 import yaml
 
@@ -18,13 +19,13 @@ if TYPE_CHECKING:
     from zhizong.loader import Corpus
 
 __all__ = [
-    "Violation",
     "RegistryError",
-    "rule",
-    "implemented_ids",
-    "document_ids",
+    "Violation",
     "assert_closure",
+    "document_ids",
+    "implemented_ids",
     "invariant",
+    "rule",
     "severity_of",
 ]
 

@@ -265,7 +265,7 @@ def _productions_regexes(doc: dict) -> tuple[re.Pattern, ...]:
     return _compile_regexes(str(productions))
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _compile_regexes(productions: str) -> tuple[re.Pattern, ...]:
     out = []
     for body in re.findall(r"/([^/\n]+)/", productions):

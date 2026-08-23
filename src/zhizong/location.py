@@ -61,11 +61,11 @@ if TYPE_CHECKING:
 
 __all__ = [
     "configure_location",
-    "unique_normalized_location",
     "http_cross_check",
     "parameter_closure",
     "parameter_targets_scalar",
     "scalar_urn_location",
+    "unique_normalized_location",
 ]
 
 
@@ -153,8 +153,10 @@ def _spec_paths(provides: str, cache: dict) -> SpecResult:
         if not spec_path.is_file():
             cache[key] = (
                 None,
-                f"Provides spec {provides!r} not found under the contracts"
-                f" root ({spec_path})",
+                (
+                    f"Provides spec {provides!r} not found under the contracts"
+                    f" root ({spec_path})"
+                ),
             )
         else:
             try:
@@ -171,8 +173,10 @@ def _spec_paths(provides: str, cache: dict) -> SpecResult:
                 if not isinstance(paths, dict):
                     cache[key] = (
                         None,
-                        f"Provides spec {provides!r} has no top-level"
-                        " 'paths' mapping",
+                        (
+                            f"Provides spec {provides!r} has no top-level"
+                            " 'paths' mapping"
+                        ),
                     )
                 else:
                     cache[key] = (paths, None)
