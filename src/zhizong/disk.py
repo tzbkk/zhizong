@@ -41,7 +41,7 @@ R12 walks ``data_root`` with the same logic:
 
 No-op gates: both rules return [] when the corpus has no file-scheme
 Location structures; R12 additionally returns [] when ``data_root`` is None
-— the ``data_root`` config key is deliberately deferred past 0.1.0 (no
+— the ``data_root`` config key is deliberately deferred by design (no
 consumer yet), so the CLI never configures it and R12 stays dormant. R11
 raises RuntimeError only when file Locations exist and the module was never
 configured.
@@ -88,7 +88,7 @@ def configure_disk(
     """Set the tree roots consumed by R11 (``<root>/fixtures/``) and R12.
 
     data_root: real-data tree root; None (the default) keeps R12 dormant —
-        the data_root config key is deferred by design in 0.1.0.
+        the data_root config key is deferred by design.
     """
 
     global _contracts_root, _data_root

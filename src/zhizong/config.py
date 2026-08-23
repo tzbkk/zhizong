@@ -8,7 +8,7 @@ directory traversal. Recognised keys:
 * ``contracts_root`` — optional, default ``contracts``; relative to the
   working directory.
 
-``data_root`` is deliberately NOT a recognised key in 0.1.0 (no consumer:
+``data_root`` is deliberately NOT a recognised key (no consumer:
 R12 stays dormant until the real-tree pass gains one); a config carrying it
 is rejected with a clear message rather than silently ignored.
 """
@@ -65,7 +65,7 @@ def load_config(path: Path | None) -> dict:
         )
     if "data_root" in parsed:
         raise ConfigError(
-            f"{config_path}: key 'data_root' is not supported in 0.1.0"
+            f"{config_path}: key 'data_root' is not supported"
             " (real-tree validation is deferred by design); remove it"
         )
     if "namespace" not in parsed:

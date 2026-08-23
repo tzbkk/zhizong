@@ -77,7 +77,10 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="command", required=True, metavar="COMMAND"
     )
     validate = subparsers.add_parser(
-        "validate", help="validate the contract corpus under contracts_root"
+        "validate",
+        help="validate the contract corpus under contracts_root",
+        epilog="Exit codes: 0 = no fail violations (warn-only is 0),"
+        " 1 = at least one fail violation, 2 = usage or config error.",
     )
     validate.add_argument(
         "--config",
