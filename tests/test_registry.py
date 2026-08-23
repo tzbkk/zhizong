@@ -2,6 +2,13 @@
 
 import pytest
 
+from zhizong import (  # noqa: F401 — importing registers all rules
+    disk,
+    graph,
+    location,
+    samples,
+    shapes,
+)
 from zhizong.registry import (
     RegistryError,
     Violation,
