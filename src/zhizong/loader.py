@@ -35,12 +35,17 @@ class Corpus:
     violations: load-time findings (bad YAML, Name-less files, injection
         collisions); rule outputs are produced separately by the checks.
     system_names: Names of the injected system documents.
+    duplicate_names: within-consumer Names seen more than once on disk;
+        first occurrence wins in ``documents``, each repeat is recorded
+        here for R17 to flag (system collisions emit a load-time
+        violation instead).
     """
 
     documents: dict[Any, dict] = field(default_factory=dict)
     externals: dict = field(default_factory=dict)
     violations: list[Violation] = field(default_factory=list)
     system_names: frozenset = frozenset()
+    duplicate_names: list = field(default_factory=list)
 
     def versions(self) -> dict[Any, dict]:
         return {
@@ -78,14 +83,15 @@ def load_corpus(contracts_root: Path | str) -> Corpus:
     A missing ``contracts_root`` is legal: the corpus then carries only the
     injected system documents. ``externals.yaml`` at the root is loaded into
     ``Corpus.externals`` and never into ``documents``. Within-consumer
-    duplicate Names keep the first occurrence and emit nothing — flagging
-    them is R17's job (T4-T6).
+    duplicate Names keep the first occurrence; repeats are recorded in
+    ``duplicate_names`` for R17 to flag.
     """
 
     root = Path(contracts_root)
     documents: dict[Any, dict] = {}
     violations: list[Violation] = []
     externals: dict = {}
+    duplicate_names: list[Any] = []
 
     externals_path = root / "externals.yaml"
     if externals_path.is_file():
@@ -135,6 +141,7 @@ def load_corpus(contracts_root: Path | str) -> Corpus:
                 )
                 continue
             if name in documents:
+                duplicate_names.append(name)
                 continue
             documents[name] = parsed
 
@@ -158,6 +165,7 @@ def load_corpus(contracts_root: Path | str) -> Corpus:
         externals=externals,
         violations=violations,
         system_names=frozenset(system_names),
+        duplicate_names=duplicate_names,
     )
 
 
