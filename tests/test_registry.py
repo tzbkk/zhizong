@@ -2,6 +2,10 @@
 
 import pytest
 
+import zhizong.disk  # noqa: F401 -- importing registers R11/R12/R18
+import zhizong.graph  # noqa: F401 -- importing registers R01-R05/R17/R20
+import zhizong.location  # noqa: F401 -- importing registers R06-R10
+import zhizong.samples  # noqa: F401 -- importing registers R13-R15
 import zhizong.shapes  # noqa: F401 -- importing registers R16/R19
 from zhizong.registry import (
     RegistryError,
@@ -43,12 +47,9 @@ def test_duplicate_id_rejected():
             return []
 
 
-@pytest.mark.xfail(reason="closure completes at T7 (R01-R15, R17, R20 pending)", strict=True)
 def test_r18_closure_bidirectional():
-    # Staged assertion (task 3): implemented == {R16, R19} today, so this test
-    # genuinely fails and the strict xfail absorbs it. It turns green at T7
-    # when all of R01-R20 are registered; strict=True then reports XPASS as an
-    # error, forcing T7 to remove this marker.
+    # Closure completed at T7: all of R01-R20 are implemented and the
+    # staged xfail (task 3) is removed — equality must now hold for real.
     assert implemented_ids() == document_ids()
     assert_closure()
 
