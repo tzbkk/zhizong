@@ -11,13 +11,17 @@ Grammar statements (``zhizong/versions/1.yaml``, Definition.Invariants):
   严格相等。
 
 Tree expansion (shared by both rules): a ``file:`` Location's path (the part
-after ``file:``, e.g. ``data/{guild}/feeds.jsonl``) is walked segment by
-segment against a tree root. A literal segment must exist on disk (a branch
-that dies contributes nothing). A segment containing ``{var}`` enumerates the
-child DIRECTORIES of the current directory; when the segment holds exactly
-one variable and that variable's ``Parameters[var].Pattern`` is a compilable
-regex, a child name survives only on ``re.fullmatch`` (missing Pattern → any
-child matches). Variables in separate segments expand over all combinations
+after ``file:``, e.g. ``data/{guild}/feeds/{feed_id}.json``) is walked
+segment by segment against a tree root. A literal segment must exist on
+disk (a branch that dies contributes nothing). A segment containing
+``{var}`` compiles to ONE anchored regex over child names — every literal
+part escaped (so literal prefixes/suffixes around a variable, e.g.
+``B_{shard}`` or ``{package}.tar.zst``, are enforced), each variable
+becoming a capture group whose body is that variable's compilable
+``Parameters[var].Pattern`` when present, else ``[^/]+`` — and enumerates
+ALL children (files AND directories) of the current directory, a child
+surviving on a full name match; variables therefore expand in filename
+position too. Variables in separate segments expand over all combinations
 naturally through the walk. The expansion of a Location is the set of FILES
 reachable this way; an empty set means the walk died (or ended on
 directories).
@@ -129,31 +133,39 @@ def _patterns(doc: dict) -> dict[str, str]:
     return out
 
 
+def _segment_regex(segment: str, patterns: dict[str, str]) -> re.Pattern:
+    """Anchored regex for a variable segment: literals escaped, each
+    ``{var}`` a capture group of its compilable Pattern (else ``[^/]+``)."""
+
+    body = ""
+    for index, piece in enumerate(_VAR_RE.split(segment)):
+        if index % 2:
+            body += f"({patterns.get(piece, '[^/]+')})"
+        else:
+            body += re.escape(piece)
+    return re.compile(f"^{body}$")
+
+
 def _expand(root: Path, location: str, patterns: dict[str, str]) -> set[Path]:
     """Concrete files reachable by walking the Location's path segments."""
 
     segments = [s for s in location[len("file:") :].split("/") if s]
     candidates = {root}
     for segment in segments:
-        variables = _VAR_RE.findall(segment)
         advanced = set()
-        for current in candidates:
-            if not variables:
+        if _VAR_RE.search(segment):
+            matcher = _segment_regex(segment, patterns)
+            for current in candidates:
+                if not current.is_dir():
+                    continue
+                for child in current.iterdir():
+                    if matcher.fullmatch(child.name):
+                        advanced.add(child)
+        else:
+            for current in candidates:
                 candidate = current / segment
                 if candidate.exists():
                     advanced.add(candidate)
-            elif current.is_dir():
-                for child in current.iterdir():
-                    if not child.is_dir():
-                        continue
-                    if len(variables) == 1:
-                        pattern = patterns.get(variables[0])
-                        if (
-                            pattern is not None
-                            and re.fullmatch(pattern, child.name) is None
-                        ):
-                            continue
-                    advanced.add(child)
         candidates = advanced
         if not candidates:
             break

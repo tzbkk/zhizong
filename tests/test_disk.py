@@ -125,6 +125,113 @@ def test_r11_unconfigured_raises(tmp_path, monkeypatch):
         r11_fixture_tree_bidirectional(corpus)
 
 
+# --- R11: variable segments — filename positions, literal prefix/suffix ---
+
+
+def test_r11_variable_in_filename_position_matches_files(tmp_path):
+    configure_disk(tmp_path)
+    touch(
+        tmp_path / "fixtures" / "data" / "111" / "feeds" / "B_df" / "f1.json"
+    )
+    corpus = corpus_of(
+        structure("feed", "file:data/{guild}/feeds/B_{shard}/{feed_id}.json")
+    )
+
+    assert r11_fixture_tree_bidirectional(corpus) == []
+
+
+def test_r11_literal_prefix_segment_filters_children(tmp_path):
+    configure_disk(tmp_path)
+    kept = touch(tmp_path / "fixtures" / "feeds" / "B_df" / "f.json")
+    rejected = touch(tmp_path / "fixtures" / "feeds" / "c_20" / "f.json")
+    corpus = corpus_of(
+        structure("feed", "file:feeds/B_{shard}/{feed_id}.json")
+    )
+
+    violations = r11_fixture_tree_bidirectional(corpus)
+
+    assert len(violations) == 1
+    assert violations[0].doc is None
+    assert str(rejected) in violations[0].message
+    assert str(kept) not in violations[0].message
+
+
+def test_r11_literal_suffix_segment_filters_children(tmp_path):
+    configure_disk(tmp_path)
+    kept = touch(tmp_path / "fixtures" / "packages" / "x.tar.zst")
+    rejected_gz = touch(tmp_path / "fixtures" / "packages" / "x.tar.gz")
+    rejected_plain = touch(tmp_path / "fixtures" / "packages" / "README")
+    corpus = corpus_of(structure("pkg", "file:packages/{package}.tar.zst"))
+
+    violations = r11_fixture_tree_bidirectional(corpus)
+
+    assert len(violations) == 2
+    assert all(v.doc is None for v in violations)
+    messages = " | ".join(v.message for v in violations)
+    assert str(rejected_gz) in messages
+    assert str(rejected_plain) in messages
+    assert str(kept) not in messages
+
+
+def test_r11_stray_extension_file_rejected_in_feeds_dir(tmp_path):
+    configure_disk(tmp_path)
+    kept = touch(tmp_path / "fixtures" / "feeds" / "B_df" / "B_9d8.json")
+    stray = touch(tmp_path / "fixtures" / "feeds" / "B_df" / "notes.txt")
+    corpus = corpus_of(
+        structure("feed", "file:feeds/B_{shard}/{feed_id}.json")
+    )
+
+    violations = r11_fixture_tree_bidirectional(corpus)
+
+    assert len(violations) == 1
+    assert violations[0].doc is None
+    assert str(stray) in violations[0].message
+    assert str(kept) not in violations[0].message
+
+
+def test_r11_variable_final_position_matches_files_not_dirs(tmp_path):
+    configure_disk(tmp_path)
+    touch(tmp_path / "fixtures" / "media" / "0f" / "pic.png")
+    (tmp_path / "fixtures" / "media" / "1a" / "weird.png").mkdir(parents=True)
+    corpus = corpus_of(
+        structure("media", "file:media/{shard}/{media_file}")
+    )
+
+    assert r11_fixture_tree_bidirectional(corpus) == []
+
+
+def test_r11_multi_variable_nested_combinations(tmp_path):
+    configure_disk(tmp_path)
+    touch(
+        tmp_path
+        / "fixtures"
+        / "data"
+        / "111"
+        / "comments"
+        / "c_20"
+        / "c_abc.json"
+    )
+    touch(
+        tmp_path
+        / "fixtures"
+        / "data"
+        / "222"
+        / "comments"
+        / "r_7d"
+        / "r_def.json"
+    )
+    corpus = corpus_of(
+        structure(
+            "comment", "file:data/{guild}/comments/c_{shard}/{comment_id}.json"
+        ),
+        structure(
+            "reply", "file:data/{guild}/comments/r_{shard}/{reply_id}.json"
+        ),
+    )
+
+    assert r11_fixture_tree_bidirectional(corpus) == []
+
+
 # --- R12: real data tree ---
 
 
