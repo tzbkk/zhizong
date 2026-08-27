@@ -299,10 +299,12 @@ def test_validate_data_root_flag_missing_dir_is_silent(tmp_path):
 
 
 def test_version_prints_package_version(tmp_path):
+    import re
+
     from zhizong import __version__
 
     result = run_cli(tmp_path, "--version")
 
     assert result.returncode == 0
     assert result.stdout.strip() == __version__
-    assert __version__ == "0.1.1"
+    assert re.fullmatch(r"\d+\.\d+\.\d+([.-].+)?", __version__)

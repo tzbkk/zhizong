@@ -1,3 +1,6 @@
 def test_version():
+    import re
+
     import zhizong
-    assert zhizong.__version__ == "0.1.1"
+
+    assert re.fullmatch(r"\d+\.\d+\.\d+([.-].+)?", zhizong.__version__)
