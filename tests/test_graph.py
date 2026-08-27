@@ -208,6 +208,45 @@ def test_r03_nonempty_upstream_without_downstream_holder_fails():
     assert "feed" in violations[0].message
 
 
+def test_r03_pure_external_upstream_exempt():
+    # External sources declare no Downstream — pure external lists need
+    # no endorsement.
+    corpus = make_corpus(
+        component("a", Upstream={"feed": ["external:qq"]}),
+        structure("feed"),
+        externals=QQ_EXTERNALS,
+    )
+
+    assert r03_upstream_needs_downstream_counterpart(corpus) == []
+
+
+def test_r03_mixed_upstream_without_endorsement_fails():
+    corpus = make_corpus(
+        component("a", Upstream={"feed": ["external:qq", "b"]}),
+        component("b", Downstream={}),
+        structure("feed"),
+        externals=QQ_EXTERNALS,
+    )
+
+    violations = r03_upstream_needs_downstream_counterpart(corpus)
+
+    assert len(violations) == 1
+    assert violations[0].rule_id == "R03"
+    assert violations[0].doc == "a"
+    assert "feed" in violations[0].message
+
+
+def test_r03_mixed_upstream_with_endorsement_passes():
+    corpus = make_corpus(
+        component("a", Upstream={"feed": ["external:qq", "b"]}),
+        component("b", Downstream={"feed": ["a"]}),
+        structure("feed"),
+        externals=QQ_EXTERNALS,
+    )
+
+    assert r03_upstream_needs_downstream_counterpart(corpus) == []
+
+
 # ---------------------------------------------------------------- R04
 
 

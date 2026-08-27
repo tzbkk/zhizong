@@ -132,7 +132,9 @@ def r02_nodes_exist(corpus: Corpus) -> list[Violation]:
 def r03_upstream_needs_downstream_counterpart(corpus: Corpus) -> list[Violation]:
     """Non-empty C.Upstream[S] needs some X with C ∈ X.Downstream[S].
 
-    An empty list is legal — the counterparty is the file itself.
+    Exemptions: an empty list (the counterparty is the file itself) and a
+    purely ``external:*`` list (external sources declare no Downstream) —
+    only lists holding at least one component node need endorsement.
     """
 
     components = corpus.components()
@@ -145,7 +147,9 @@ def r03_upstream_needs_downstream_counterpart(corpus: Corpus) -> list[Violation]
 
     out: list[Violation] = []
     for name, io_field, key, nodes in _component_edges(components):
-        if io_field != "Upstream" or not nodes:
+        if io_field != "Upstream":
+            continue
+        if not any(_is_component_node(node) for node in nodes):
             continue
         if name not in downstream_members.get(key, frozenset()):
             out.append(
