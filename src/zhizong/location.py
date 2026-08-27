@@ -21,17 +21,45 @@ Matching semantics:
 * R07 binds matching is exact string equality between the Location's
   netloc (``host:port`` per stdlib ``urllib.parse``) and the service's
   ``Binds`` value — no host canonicalisation (``0.0.0.0`` ≠ ``localhost``).
-  The Location's raw path component (template variables left in place,
-  matching OpenAPI path templating) must be a key of the spec's ``paths``.
+  The Location's raw path component (template variables left in place)
+  must be a registered path in that service's routing table.
 
-Degraded OpenAPI semantics (W4 scope): a service's ``Provides`` is a plain
-string naming an OpenAPI spec FILE, resolved as a path relative to the
-configured contracts root. R07 checks, in order: (a) the file exists,
-(b) it is YAML-parseable, (c) its parsed root carries a top-level ``paths``
-mapping, (d) the Location's path is a key in it. Full OpenAPI 3.1
-validation is explicitly out of scope.
+Routing-table semantics (native format, signed by the consumer project's
+author): a service's ``Provides`` is a plain string naming a routing-table
+FILE, resolved as a path relative to the configured contracts root — same
+resolution as any other Provides artefact. Convention: a ``.txt``
+extension (e.g. ``routes/archive.txt``); the corpus loader scans only
+``*.yaml``, so routing files are deliberately invisible to it. The format
+is plain text, one route per line::
 
-Configuration: R07 needs the contracts root to resolve Provides spec files
+    # <METHOD> <path>            full-line comments and blank lines ignored
+    GET  /archive/guilds
+    POST /archive/create
+    GET  /archive/jobs/{id}
+
+Line grammar: optional leading whitespace, a METHOD token (exactly one of
+``GET``, ``POST``, ``PUT``, ``DELETE``, ``PATCH``, uppercase), one-or-more
+whitespace, then a path token (must start with ``/``, no whitespace
+inside; ``{var}`` template segments allowed as in OpenAPI path
+templating), then nothing else — a line with any content after the path
+token is invalid (trailing comments are NOT part of the format; only
+full-line comments, whose first non-whitespace character is ``#``).
+Semantic constraints enforced at parse/load: each path may be registered
+with EXACTLY ONE method across the whole file (duplicate registration,
+same or different verb, is a violation); unknown method tokens, paths not
+starting with ``/``, and garbage after the path are parse violations.
+Parse and duplicate-registration violations are attributed to the service
+component naming the file; an unregistered Location path is attributed to
+the structure, as always. The table carries verb authority — structures
+carry no verb — so R07 checks only path registration, never method.
+
+Historical note: through v0.2.x ``Provides`` named an OpenAPI spec file
+whose ``paths`` mapping was consulted (a degraded W4-scope reading); the
+OpenAPI path is dead — a YAML file given as ``Provides`` now parses as
+routing text and almost certainly violates.
+
+Configuration: R07 needs the contracts root to resolve Provides routing
+files
 and R10 needs the urn namespace. Both are supplied once via
 :func:`configure_location`, which the CLI (T7) MUST call before dispatching
 rules. A rule raises RuntimeError only at the point it actually needs
@@ -51,8 +79,6 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
-
-import yaml
 
 from zhizong.registry import Violation, rule, severity_of
 
@@ -79,7 +105,7 @@ def configure_location(contracts_root: Path, namespace: str) -> None:
     """Set the module configuration consumed by R07 and R10.
 
     contracts_root: root under which R07 resolves a service's ``Provides``
-        spec-file path (relative paths are joined onto this root).
+        routing-file path (relative paths are joined onto this root).
     namespace: urn namespace for R10's expected scalar addresses
         (``urn:<namespace>:type:<Name>``).
 
@@ -131,56 +157,101 @@ def unique_normalized_location(corpus: Corpus) -> list[Violation]:
     return out
 
 
-_SPEC_RESULT_ERROR = tuple[None, str]
-_SPEC_RESULT_PATHS = tuple[dict, None]
-SpecResult = _SPEC_RESULT_ERROR | _SPEC_RESULT_PATHS
+_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
+
+_TABLE_OK = tuple[frozenset[str], None, tuple[()]]
+_TABLE_LOAD_ERROR = tuple[None, str, tuple[()]]
+_TABLE_LINE_ERRORS = tuple[None, None, tuple[str, ...]]
+RoutingTableResult = _TABLE_OK | _TABLE_LOAD_ERROR | _TABLE_LINE_ERRORS
 
 
-def _spec_paths(provides: str, cache: dict) -> SpecResult:
-    """Resolve a Provides spec file → ``(paths mapping, None)`` on success or
-    ``(None, error message)`` on failure (degraded W4 semantics: existence,
-    YAML-parseability, top-level ``paths`` mapping — nothing more).
+def _routing_table(provides: str, cache: dict) -> RoutingTableResult:
+    """Resolve a Provides routing file → ``(paths, None, ())`` on success,
+    ``(None, load_error, ())`` when the file cannot be loaded, or
+    ``(None, None, line_errors)`` for parse/duplicate violations (native
+    plain-text format — see module docstring).
     """
 
     if _contracts_root is None:
         raise RuntimeError(
             "configure_location() must be called before R07 can"
-            " resolve Provides spec files"
+            " resolve Provides routing files"
         )
-    spec_path = _contracts_root / provides
-    key = str(spec_path)
+    table_path = _contracts_root / provides
+    key = str(table_path)
     if key not in cache:
-        if not spec_path.is_file():
-            cache[key] = (
-                None,
-                (
-                    f"Provides spec {provides!r} not found under the contracts"
-                    f" root ({spec_path})"
-                ),
-            )
-        else:
-            try:
-                parsed = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
-            except (yaml.YAMLError, OSError) as exc:
-                cache[key] = (
-                    None,
-                    f"Provides spec {provides!r} is not YAML-parseable: {exc}",
-                )
-            else:
-                paths = (
-                    parsed.get("paths") if isinstance(parsed, dict) else None
-                )
-                if not isinstance(paths, dict):
-                    cache[key] = (
-                        None,
-                        (
-                            f"Provides spec {provides!r} has no top-level"
-                            " 'paths' mapping"
-                        ),
-                    )
-                else:
-                    cache[key] = (paths, None)
+        cache[key] = _parse_routing_table(table_path, provides)
     return cache[key]
+
+
+def _parse_routing_table(table_path: Path, provides: str) -> RoutingTableResult:
+    if not table_path.is_file():
+        return (
+            None,
+            (
+                f"Provides routing file {provides!r} not found under the"
+                f" contracts root ({table_path})"
+            ),
+            (),
+        )
+    try:
+        text = table_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return (
+            None,
+            f"Provides routing file {provides!r} is not readable: {exc}",
+            (),
+        )
+    paths: set[str] = set()
+    claimed_by: dict[str, tuple[int, str]] = {}
+    errors: list[str] = []
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        tokens = line.split()
+        method, rest = tokens[0], tokens[1:]
+        if method not in _METHODS:
+            errors.append(
+                f"Provides routing file {provides!r} line {lineno}:"
+                f" unknown method token {method!r}"
+                f" (must be one of {', '.join(_METHODS)})"
+            )
+            continue
+        if not rest:
+            errors.append(
+                f"Provides routing file {provides!r} line {lineno}:"
+                f" {method} route is missing its path token"
+            )
+            continue
+        path = rest[0]
+        if not path.startswith("/"):
+            errors.append(
+                f"Provides routing file {provides!r} line {lineno}:"
+                f" path {path!r} must start with '/'"
+            )
+            continue
+        if len(rest) > 1:
+            errors.append(
+                f"Provides routing file {provides!r} line {lineno}:"
+                f" trailing content {' '.join(rest[1:])!r} after path"
+                f" {path!r} (trailing comments are not part of the format)"
+            )
+            continue
+        if path in claimed_by:
+            first_lineno, first_method = claimed_by[path]
+            errors.append(
+                f"Provides routing file {provides!r} line {lineno}:"
+                f" path {path!r} already registered on line {first_lineno}"
+                f" ({first_method}); each path may be registered with"
+                " exactly one method"
+            )
+            continue
+        claimed_by[path] = (lineno, method)
+        paths.add(path)
+    if errors:
+        return (None, None, tuple(errors))
+    return (frozenset(paths), None, ())
 
 
 @rule("R07")
@@ -188,9 +259,12 @@ def http_cross_check(corpus: Corpus) -> list[Violation]:
     """R07: http Locations must be wired to exactly one service.
 
     For a Location starting ``http:``: its netloc (``host:port``) must equal
-    exactly one service component's ``Binds``; the Location's path must then
-    be a key in that service's ``Provides`` spec ``paths`` (degraded W4
-    semantics — see module docstring).
+    exactly one service component's ``Binds``; the Location's raw path
+    (template variables left in place) must be registered in that service's
+    ``Provides`` routing table (native plain-text format — see module
+    docstring). Routing-table parse errors and duplicate registrations are
+    attributed to the service component; an unregistered path is attributed
+    to the structure.
     """
 
     severity = severity_of("R07")
@@ -199,7 +273,8 @@ def http_cross_check(corpus: Corpus) -> list[Violation]:
         for name, doc in corpus.components().items()
         if isinstance(doc, dict) and doc.get("ComponentType") == "service"
     }
-    spec_cache: dict = {}
+    table_cache: dict = {}
+    tables_reported: set[str] = set()
     out: list[Violation] = []
     for name, doc in corpus.structures().items():
         location = doc.get("Location")
@@ -232,20 +307,28 @@ def http_cross_check(corpus: Corpus) -> list[Violation]:
                 )
             )
             continue
-        provides = services[matches[0]].get("Provides")
+        service = matches[0]
+        provides = services[service].get("Provides")
         if not isinstance(provides, str) or not provides:
             continue  # missing/empty Provides is a Shapes.Document finding
-        paths, error = _spec_paths(provides, spec_cache)
+        paths, load_error, line_errors = _routing_table(provides, table_cache)
         if paths is None:
-            out.append(
-                Violation(
-                    "R07",
-                    name,
-                    f"http Location {location!r} via service"
-                    f" {matches[0]!r}: {error}",
-                    severity,
+            if load_error is not None:
+                out.append(
+                    Violation(
+                        "R07",
+                        name,
+                        f"http Location {location!r} via service"
+                        f" {service!r}: {load_error}",
+                        severity,
+                    )
                 )
-            )
+            elif line_errors and service not in tables_reported:
+                tables_reported.add(service)
+                out.extend(
+                    Violation("R07", service, error, severity)
+                    for error in line_errors
+                )
             continue
         if parts.path not in paths:
             out.append(
@@ -253,8 +336,8 @@ def http_cross_check(corpus: Corpus) -> list[Violation]:
                     "R07",
                     name,
                     f"http Location {location!r}: path {parts.path!r} is"
-                    f" not among the paths of service {matches[0]!r}'s"
-                    f" Provides spec {provides!r}",
+                    f" not among the registered paths of service"
+                    f" {service!r}'s Provides routing file {provides!r}",
                     severity,
                 )
             )
