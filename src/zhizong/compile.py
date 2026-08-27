@@ -19,6 +19,16 @@ Implements the normative mapping of ``Semantics.FieldTableCompilation``
    compiles to ``{"$ref": "#/$defs/<recordName>"}``; nested record references
    compile recursively in dependency order, and reference cycles fail
    loudly with ``ValueError``
+9. a trailing ``?`` makes any type nullable:
+   ``compile("T?") → {"anyOf": [compile("T"), {"type": "null"}]}`` — the
+   ``?`` is stripped before anything else (including reference lookup);
+   Required stays orthogonal: a nullable-but-required key must exist,
+   its value may be null
+10. ``|`` alternatives split at bracket-depth 0 (outside any ``<>``)
+   compile to ``{"enum": [...]}`` in order, every part a bare literal
+   matching ``^[A-Za-z0-9_.-]+$`` — anything else fails with
+   ``ValueError``; parentheses grouping a whole expression are pure
+   syntax and stripped (``"(a|b)?" == "a|b?"``)
 
 Output conventions (deterministic, side-effect-free):
 - the root schema and every ``$defs`` record product carry ``type``,
@@ -38,6 +48,7 @@ __all__ = ["compile_structure"]
 
 _BASE_TYPES = ("string", "integer", "number", "boolean")
 _ARRAY_RE = re.compile(r"^array<(.+)>$")
+_ENUM_LITERAL_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def compile_structure(structure_doc: dict, corpus: Corpus) -> dict:
@@ -86,18 +97,77 @@ def _compile_table(
     return properties, required
 
 
+def _unwrap_grouping(expression: str) -> str:
+    """Drop one parenthesis pair grouping the WHOLE expression.
+
+    ``(expr)`` is pure grouping syntax; a ``(`` that closes before the end
+    (e.g. ``(a|b)|c``) leaves the expression untouched.
+    """
+
+    if not (expression.startswith("(") and expression.endswith(")")):
+        return expression
+    depth = 0
+    for index, char in enumerate(expression):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return (
+                    expression[1:-1]
+                    if index == len(expression) - 1
+                    else expression
+                )
+    return expression
+
+
+def _split_alternation(expression: str) -> list[str]:
+    """Split on ``|`` at bracket-depth 0 (outside any ``<>``)."""
+
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for index, char in enumerate(expression):
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            depth = max(0, depth - 1)
+        elif char == "|" and depth == 0:
+            parts.append(expression[start:index])
+            start = index + 1
+    parts.append(expression[start:])
+    return parts
+
+
 def _compile_type(
     type_expr: str, entry: dict, corpus: Corpus, defs: dict[str, dict], stack: list[str]
 ) -> dict:
-    array = _ARRAY_RE.match(type_expr)
+    expression = type_expr.strip()
+    if expression.endswith("?"):
+        inner = _compile_type(expression[:-1], entry, corpus, defs, stack)
+        return {"anyOf": [inner, {"type": "null"}]}
+    ungrouped = _unwrap_grouping(expression)
+    if ungrouped != expression:
+        return _compile_type(ungrouped, entry, corpus, defs, stack)
+    parts = _split_alternation(expression)
+    if len(parts) > 1:
+        for part in parts:
+            if not _ENUM_LITERAL_RE.fullmatch(part):
+                raise ValueError(
+                    f"field-table type {type_expr!r}: '|' alternatives must"
+                    " be bare literals matching ^[A-Za-z0-9_.-]+$"
+                    f" (got {part!r})"
+                )
+        return {"enum": parts}
+    array = _ARRAY_RE.match(expression)
     if array:
         inner = _compile_type(array.group(1).strip(), entry, corpus, defs, stack)
         return {"type": "array", "items": inner}
-    if type_expr in _BASE_TYPES:
-        return {"type": type_expr}
-    if type_expr == "object":
+    if expression in _BASE_TYPES:
+        return {"type": expression}
+    if expression == "object":
         return _compile_inline_object(entry, corpus, defs, stack)
-    return _compile_reference(type_expr, corpus, defs, stack)
+    return _compile_reference(expression, corpus, defs, stack)
 
 
 def _compile_inline_object(

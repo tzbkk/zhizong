@@ -1,4 +1,4 @@
-"""Compiler tests: one per Semantics.FieldTableCompilation rule (8 rules).
+"""Compiler tests: one per Semantics.FieldTableCompilation rule (10 rules).
 
 The exact expected schema dicts below lock the normative mapping shipped in
 ``zhizong/versions/1.yaml`` (Semantics.FieldTableCompilation.Rules).
@@ -303,6 +303,162 @@ def test_non_record_structure_cannot_compile():
     doc["Definition"]["Productions"] = "line ::= /.+/"
 
     with pytest.raises(ValueError, match="record"):
+        compile_structure(doc, corpus_of(doc))
+
+
+# --- rule 9: trailing '?' nullable suffix ---
+
+
+def test_rule9_nullable_base_type_compiles_anyof_with_null():
+    doc = structure("Rec", [item("note", "string?")])
+    schema = compile_structure(doc, corpus_of(doc))
+
+    assert schema["properties"]["note"] == {
+        "anyOf": [{"type": "string"}, {"type": "null"}]
+    }
+
+    validator = jsonschema.Draft202012Validator(schema)
+    assert validator.is_valid({"note": None})
+    assert validator.is_valid({"note": "hello"})
+    assert validator.is_valid({})
+    assert not validator.is_valid({"note": 7})
+
+
+def test_rule9_nullable_scalar_reference_enforces_pattern_on_non_null():
+    sid = scalar("FeedId", "string", "^feed-[0-9]+$")
+    doc = structure("Rec", [item("id", "FeedId?")])
+    schema = compile_structure(doc, corpus_of(sid, doc))
+
+    assert schema["properties"]["id"] == {
+        "anyOf": [
+            {"type": "string", "pattern": "^feed-[0-9]+$"},
+            {"type": "null"},
+        ]
+    }
+
+    validator = jsonschema.Draft202012Validator(schema)
+    assert validator.is_valid({"id": None})
+    assert validator.is_valid({"id": "feed-42"})
+    assert not validator.is_valid({"id": "not-a-feed"})
+
+
+def test_rule9_nullable_record_reference():
+    image = structure("ImageRecord", [item("url", "string", required=True)])
+    doc = structure("Rec", [item("cover", "ImageRecord?")])
+    schema = compile_structure(doc, corpus_of(image, doc))
+
+    assert schema["properties"]["cover"] == {
+        "anyOf": [{"$ref": "#/$defs/ImageRecord"}, {"type": "null"}]
+    }
+
+    validator = jsonschema.Draft202012Validator(schema)
+    assert validator.is_valid({"cover": None})
+    assert validator.is_valid({"cover": {"url": "u"}})
+    assert not validator.is_valid({"cover": {}})
+
+
+def test_rule9_nullable_array_distinct_from_array_of_nullable():
+    doc = structure("Rec", [item("a", "array<string>?"), item("b", "array<string?>")])
+    schema = compile_structure(doc, corpus_of(doc))
+
+    assert schema["properties"]["a"] == {
+        "anyOf": [
+            {"type": "array", "items": {"type": "string"}},
+            {"type": "null"},
+        ]
+    }
+    assert schema["properties"]["b"] == {
+        "type": "array",
+        "items": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    }
+
+    validator = jsonschema.Draft202012Validator(schema)
+    assert validator.is_valid({"a": None, "b": [None]})
+    assert validator.is_valid({"a": ["x"], "b": ["y"]})
+    assert not validator.is_valid({"a": None, "b": None})  # b is not nullable
+    assert not validator.is_valid({"a": [None], "b": []})  # a items not nullable
+
+
+def test_rule9_nullable_required_field_must_exist_but_may_be_null():
+    doc = structure("Rec", [item("note", "string?", required=True)])
+    schema = compile_structure(doc, corpus_of(doc))
+
+    assert schema["required"] == ["note"]
+
+    validator = jsonschema.Draft202012Validator(schema)
+    assert validator.is_valid({"note": None})
+    assert not validator.is_valid({})
+
+
+def test_lone_question_mark_raises():
+    doc = structure("Rec", [item("x", "?")])
+
+    with pytest.raises(ValueError):
+        compile_structure(doc, corpus_of(doc))
+
+
+# --- rule 10: '|' string-literal enums ---
+
+
+def test_rule10_enum_of_literals_compiles_in_order():
+    doc = structure("Rec", [item("status", "pending|ok|failed")])
+    schema = compile_structure(doc, corpus_of(doc))
+
+    assert schema["properties"]["status"] == {"enum": ["pending", "ok", "failed"]}
+
+    validator = jsonschema.Draft202012Validator(schema)
+    assert validator.is_valid({"status": "pending"})
+    assert validator.is_valid({"status": "ok"})
+    assert not validator.is_valid({"status": "unknown"})
+    assert not validator.is_valid({"status": 1})
+
+
+def test_rule10_enum_inside_array_items():
+    doc = structure("Rec", [item("states", "array<pending|ok>")])
+    schema = compile_structure(doc, corpus_of(doc))
+
+    assert schema["properties"]["states"] == {
+        "type": "array",
+        "items": {"enum": ["pending", "ok"]},
+    }
+
+    validator = jsonschema.Draft202012Validator(schema)
+    assert validator.is_valid({"states": ["pending", "ok"]})
+    assert not validator.is_valid({"states": ["pending", "nope"]})
+
+
+def test_rule10_nullable_enum_via_grouping_parens():
+    doc = structure("Rec", [item("status", "(pending|ok)?")])
+    schema = compile_structure(doc, corpus_of(doc))
+
+    assert schema["properties"]["status"] == {
+        "anyOf": [{"enum": ["pending", "ok"]}, {"type": "null"}]
+    }
+
+    validator = jsonschema.Draft202012Validator(schema)
+    assert validator.is_valid({"status": None})
+    assert validator.is_valid({"status": "ok"})
+    assert not validator.is_valid({"status": "nope"})
+
+
+def test_rule10_enum_part_with_space_raises():
+    doc = structure("Rec", [item("x", "Foo |bar")])
+
+    with pytest.raises(ValueError, match=r"'\|' alternatives"):
+        compile_structure(doc, corpus_of(doc))
+
+
+def test_rule10_enum_empty_part_raises():
+    doc = structure("Rec", [item("x", "a||b")])
+
+    with pytest.raises(ValueError, match=r"'\|' alternatives"):
+        compile_structure(doc, corpus_of(doc))
+
+
+def test_rule10_enum_with_bracketed_part_raises():
+    doc = structure("Rec", [item("x", "array<x>|integer")])
+
+    with pytest.raises(ValueError, match=r"'\|' alternatives"):
         compile_structure(doc, corpus_of(doc))
 
 
