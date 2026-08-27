@@ -1,6 +1,5 @@
 """CLI subprocess tests: exit-code contract 0/1/2, --version, config errors."""
 
-import json
 import subprocess
 import sys
 
@@ -26,7 +25,7 @@ def write_yaml(path, doc):
 
 def build_green_corpus(root):
     """A minimal REAL corpus: service + cli components, three structures,
-    an OpenAPI spec, sample pairs, and the R11 fixture tree."""
+    a routing table, sample pairs, and the R11 fixture tree."""
 
     contracts = root / "contracts"
     write_yaml(root / ".zhizong.yaml", {"namespace": NAMESPACE})
@@ -39,7 +38,7 @@ def build_green_corpus(root):
             "Description": "feed api service",
             "ComponentType": "service",
             "Binds": "127.0.0.1:9420",
-            "Provides": "specs/svc.json",
+            "Provides": "routes/svc.txt",
             "Upstream": {"feed": []},
             "Downstream": {"api": ["cli"]},
             "Runs": "python -m svc",
@@ -112,9 +111,9 @@ def build_green_corpus(root):
             "Definition": {"Form": "scalar", "Base": "string", "Pattern": "^[0-9]+$"},
         },
     )
-    spec = contracts / "specs" / "svc.json"
-    spec.parent.mkdir(parents=True, exist_ok=True)
-    spec.write_text(json.dumps({"paths": {"/api/feed": {"get": {}}}}), encoding="utf-8")
+    routes = contracts / "routes" / "svc.txt"
+    routes.parent.mkdir(parents=True, exist_ok=True)
+    routes.write_text("GET /api/feed\n", encoding="utf-8")
 
     samples = contracts / "samples"
     samples.mkdir(parents=True, exist_ok=True)
