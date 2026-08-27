@@ -210,25 +210,30 @@ def _referenced_structure_names(corpus: Corpus) -> set:
 
 @rule("R05")
 def r05_entrypoint_discipline(corpus: Corpus) -> list[Violation]:
-    """Edgeless components must carry ``role: entrypoint``; libraries never may."""
+    """Components declaring no I/O keys must carry ``role: entrypoint``;
+    libraries never may.
+
+    "Has I/O" is KEY PRESENCE: declaring any Upstream or Downstream key —
+    even with an empty node list (the counterparty is the file itself) —
+    counts; true orphans declare zero keys in both maps.
+    """
 
     components = corpus.components()
-    with_edges = set()
-    for name, _io_field, _key, nodes in _component_edges(components):
-        if nodes:
-            with_edges.add(name)
+    with_io_keys = set()
+    for name, _io_field, _key, _nodes in _component_edges(components):
+        with_io_keys.add(name)
 
     out: list[Violation] = []
     for name in sorted(components, key=repr):
         doc = components[name]
         has_entrypoint_role = doc.get("role") == "entrypoint"
-        if name not in with_edges and not has_entrypoint_role:
+        if name not in with_io_keys and not has_entrypoint_role:
             out.append(
                 Violation(
                     "R05",
                     name,
-                    f"component {name!r} declares no edges but is not marked"
-                    f" role: entrypoint",
+                    f"component {name!r} declares no I/O keys but is not"
+                    f" marked role: entrypoint",
                     severity_of("R05"),
                 )
             )

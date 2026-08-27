@@ -336,15 +336,13 @@ def test_r05_library_must_not_be_marked_entrypoint():
     assert "library" in violations[0].message
 
 
-def test_r05_empty_node_lists_count_as_edgeless():
-    # Lists present but ALL empty still means no edges (file counterparties).
+def test_r05_empty_node_lists_count_as_io_keys():
+    # Lists present but ALL empty still declare I/O (file counterparties)
+    # — key presence is what counts, so no entrypoint role is needed.
+    # (Exact viewer/archive corpus shape.)
     corpus = make_corpus(component("filesonly", Upstream={"feed": []}))
 
-    violations = r05_entrypoint_discipline(corpus)
-
-    assert len(violations) == 1
-    assert violations[0].rule_id == "R05"
-    assert violations[0].doc == "filesonly"
+    assert r05_entrypoint_discipline(corpus) == []
 
 
 # ---------------------------------------------------------------- R17
