@@ -7,10 +7,10 @@ directory traversal. Recognised keys:
 * ``namespace`` — REQUIRED, must match ``^[a-z][a-z0-9-]*$``.
 * ``contracts_root`` — optional, default ``contracts``; relative to the
   working directory.
-
-``data_root`` is deliberately NOT a recognised key (no consumer:
-R12 stays dormant until the real-tree pass gains one); a config carrying it
-is rejected with a clear message rather than silently ignored.
+* ``data_root`` — optional, default None; a path-ish string naming the
+  real-data tree R12 walks (same value semantics as ``contracts_root``).
+  A ``data_root`` whose directory does not exist keeps R12 dormant (the
+  CLI normalises it to None: no tree on disk, nothing to validate).
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ __all__ = ["ConfigError", "load_config"]
 
 CONFIG_FILENAME = ".zhizong.yaml"
 DEFAULT_CONTRACTS_ROOT = "contracts"
-KNOWN_KEYS = frozenset({"namespace", "contracts_root"})
+KNOWN_KEYS = frozenset({"namespace", "contracts_root", "data_root"})
 
 _NAMESPACE_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
@@ -38,10 +38,11 @@ def load_config(path: Path | None) -> dict:
 
     path: explicit config file; None means ``<cwd>/.zhizong.yaml``.
 
-    Returns ``{"namespace": str, "contracts_root": str}``; raises
-    :class:`ConfigError` for a missing file, a YAML syntax error, a
-    non-mapping document, a missing/invalid ``namespace``, a bad
-    ``contracts_root``, the deferred ``data_root`` key, or any unknown key.
+    Returns ``{"namespace": str, "contracts_root": str, "data_root":
+    str | None}``; raises :class:`ConfigError` for a missing file, a YAML
+    syntax error, a non-mapping document, a missing/invalid ``namespace``,
+    a bad ``contracts_root``/``data_root`` (non-empty path-ish string),
+    or any unknown key.
     """
 
     config_path = Path(path) if path is not None else Path.cwd() / CONFIG_FILENAME
@@ -63,11 +64,6 @@ def load_config(path: Path | None) -> dict:
             f"{config_path}: config must be a YAML mapping,"
             f" got {type(parsed).__name__}"
         )
-    if "data_root" in parsed:
-        raise ConfigError(
-            f"{config_path}: key 'data_root' is not supported"
-            " (real-tree validation is deferred by design); remove it"
-        )
     if "namespace" not in parsed:
         raise ConfigError(f"{config_path}: required key 'namespace' is missing")
     namespace = parsed["namespace"]
@@ -81,10 +77,21 @@ def load_config(path: Path | None) -> dict:
         raise ConfigError(
             f"{config_path}: contracts_root must be a non-empty string"
         )
+    data_root = parsed.get("data_root")
+    if data_root is not None and (
+        not isinstance(data_root, str) or not data_root
+    ):
+        raise ConfigError(
+            f"{config_path}: data_root must be a non-empty string"
+        )
     unknown = sorted(set(parsed) - KNOWN_KEYS)
     if unknown:
         raise ConfigError(
             f"{config_path}: unknown key(s): {', '.join(unknown)}"
             f" (recognised: {', '.join(sorted(KNOWN_KEYS))})"
         )
-    return {"namespace": namespace, "contracts_root": contracts_root}
+    return {
+        "namespace": namespace,
+        "contracts_root": contracts_root,
+        "data_root": data_root,
+    }

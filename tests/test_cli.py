@@ -208,6 +208,94 @@ def test_no_arguments_is_usage_error_exit_two(tmp_path):
     assert result.stderr.strip() != ""
 
 
+# --- data_root config key and --data-root flag (R12 wiring) ---
+
+
+def build_data_tree(root, *relpaths):
+    for rel in relpaths:
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    return root
+
+
+def test_validate_config_data_root_drives_r12(tmp_path):
+    build_green_corpus(tmp_path)
+    dirty = build_data_tree(
+        tmp_path / "dirty", "data/7743321643036658/extra.txt"
+    )
+    write_yaml(
+        tmp_path / ".zhizong.yaml",
+        {"namespace": NAMESPACE, "data_root": str(dirty)},
+    )
+
+    result = run_cli(tmp_path, "validate")
+
+    assert result.returncode == 1
+    assert "[R12]" in result.stdout
+
+
+def test_validate_data_root_flag_overrides_config(tmp_path):
+    build_green_corpus(tmp_path)
+    dirty = build_data_tree(
+        tmp_path / "dirty", "data/7743321643036658/extra.txt"
+    )
+    clean = build_data_tree(
+        tmp_path / "clean", "data/7743321643036658/feeds.jsonl"
+    )
+    write_yaml(
+        tmp_path / ".zhizong.yaml",
+        {"namespace": NAMESPACE, "data_root": str(dirty)},
+    )
+
+    result = run_cli(tmp_path, "validate", "--data-root", str(clean))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[R12]" not in result.stdout
+    assert "0 violation(s) (0 fail, 0 warn)" in result.stdout
+
+
+def test_validate_data_root_flag_alone_activates_r12(tmp_path):
+    build_green_corpus(tmp_path)
+    dirty = build_data_tree(
+        tmp_path / "dirty", "data/7743321643036658/extra.txt"
+    )
+
+    result = run_cli(tmp_path, "validate", "--data-root", str(dirty))
+
+    assert result.returncode == 1
+    assert "[R12]" in result.stdout
+
+
+def test_validate_config_data_root_missing_dir_is_silent(tmp_path):
+    build_green_corpus(tmp_path)
+    write_yaml(
+        tmp_path / ".zhizong.yaml",
+        {
+            "namespace": NAMESPACE,
+            "data_root": str(tmp_path / "no-such-tree"),
+        },
+    )
+
+    result = run_cli(tmp_path, "validate")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[R12]" not in result.stdout
+    assert "0 violation(s) (0 fail, 0 warn)" in result.stdout
+
+
+def test_validate_data_root_flag_missing_dir_is_silent(tmp_path):
+    build_green_corpus(tmp_path)
+
+    result = run_cli(
+        tmp_path, "validate", "--data-root", str(tmp_path / "no-such-tree")
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[R12]" not in result.stdout
+    assert "0 violation(s) (0 fail, 0 warn)" in result.stdout
+
+
 # --- --version ---
 
 

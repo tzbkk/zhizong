@@ -129,7 +129,7 @@ def test_r11_unconfigured_raises(tmp_path, monkeypatch):
 
 
 def test_r12_noop_without_data_root(tmp_path):
-    configure_disk(tmp_path)  # data_root deliberately None (deferred by design)
+    configure_disk(tmp_path)  # data_root None keeps R12 dormant
     corpus = corpus_of(structure("feed", FEED))
 
     assert r12_real_tree_matches(corpus) == []

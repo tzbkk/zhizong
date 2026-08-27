@@ -46,9 +46,14 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_USAGE
 
     contracts_root = Path(config["contracts_root"])
+    data_root = config["data_root"]
+    if args.data_root is not None:
+        data_root = args.data_root
+    if data_root is not None and not Path(data_root).is_dir():
+        data_root = None
     location.configure_location(contracts_root, config["namespace"])
     samples.configure_samples(contracts_root)
-    disk.configure_disk(contracts_root)
+    disk.configure_disk(contracts_root, data_root)
 
     corpus = load_corpus(contracts_root)
     violations = list(corpus.violations)
@@ -89,6 +94,14 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="config file path (default: .zhizong.yaml in the working"
         " directory)",
+    )
+    validate.add_argument(
+        "--data-root",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="real-data tree root, overriding the config file's data_root"
+        " (R12 stays dormant when absent or missing on disk)",
     )
     return parser
 
