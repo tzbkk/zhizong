@@ -1,4 +1,4 @@
-"""Component I/O graph rules: R01-R05, R17, R20.
+"""Component I/O graph rules: R01-R05, R17, R20, R21.
 
 Every check follows the registry convention — ``@rule("RXX")`` over a pure
 ``fn(corpus) -> list[Violation]`` with zero I/O. Reference maps (declared
@@ -14,12 +14,21 @@ Attribution conventions (deterministic):
 - ``external:``-prefixed nodes and empty node lists are exempt from
   symmetry checks (grammar NodeSyntax: an empty list means the
   counterparty is the file itself).
+- R03 directive claims attribute to the CLAIMING component; uniqueness
+  of declarations is R07's job, so an ambiguous claim stays silent here.
 - Every other rule attributes to the offending document's Name as keyed
   in ``Corpus.documents``.
+
+Http directive edges (generation 2): an IoMap value that is a string
+matching ``METHOD /path`` is a directive edge — on a service component it
+is a DECLARATION (route surface; consumers optional), on any other
+component it is a CLAIM that must resolve against exactly one service's
+opposite-direction declaration (hard-role rule, grammar R03).
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from typing import Any
 
@@ -27,6 +36,50 @@ from zhizong.loader import Corpus
 from zhizong.registry import Violation, rule, severity_of
 
 EXTERNAL_PREFIX = "external:"
+
+#: Reserved structure name for the corpus-global http error envelope
+#: (grammar Semantics.HttpEnvelope): R04-exempt, R13 sample-bound.
+RESERVED_ERROR_ENVELOPE = "ErrorEnvelope"
+
+#: An IoMap string value is an http directive edge iff it matches this
+#: pattern (grammar Shapes IoMap anyOf arm). Shape-invalid strings never
+#: reach the rules — the shape layer reports those.
+DIRECTIVE_RE = re.compile(r"^(GET|POST|PUT|DELETE|PATCH) /[^ ?#]*$")
+
+
+def is_directive(value: Any) -> bool:
+    """True when an IoMap value is a well-formed http directive string."""
+
+    return isinstance(value, str) and DIRECTIVE_RE.match(value) is not None
+
+
+def directive_edges(
+    components: dict,
+) -> Iterator[tuple[Any, str, Any, str]]:
+    """Stream ``(component_name, io_field, structure_key, directive)``.
+
+    Deterministic (sorted by component repr, fixed Upstream/Downstream
+    order, dict insertion order within a map). Non-dict io maps and
+    non-directive values are skipped; shape-invalid strings are the
+    shape layer's findings.
+    """
+
+    for name, doc in sorted(components.items(), key=lambda kv: repr(kv[0])):
+        if not isinstance(doc, dict):
+            continue
+        for io_field in ("Upstream", "Downstream"):
+            io_map = doc.get(io_field)
+            if not isinstance(io_map, dict):
+                continue
+            for key, value in io_map.items():
+                if is_directive(value):
+                    yield name, io_field, key, value
+
+
+def directive_referenced_structures(components: dict) -> set:
+    """Structure names carrying at least one directive edge (R13 trigger)."""
+
+    return {key for _name, _io_field, key, _directive in directive_edges(components)}
 
 
 def _is_component_node(node: Any) -> bool:
@@ -130,14 +183,30 @@ def r02_nodes_exist(corpus: Corpus) -> list[Violation]:
 
 @rule("R03")
 def r03_upstream_needs_downstream_counterpart(corpus: Corpus) -> list[Violation]:
-    """Non-empty C.Upstream[S] needs some X with C ∈ X.Downstream[S].
+    """Endorsement for list values; claim resolution for directive values.
 
-    Exemptions: an empty list (the counterparty is the file itself) and a
-    purely ``external:*`` list (external sources declare no Downstream) —
-    only lists holding at least one component node need endorsement.
+    Lists (unchanged): non-empty C.Upstream[S] needs some X with
+    C ∈ X.Downstream[S]; empty lists (counterparty is the file itself)
+    and purely ``external:*`` lists are exempt.
+
+    Directives (hard-role rule, generation 2): a service's directive
+    edge is a DECLARATION — never requires resolution; a non-service
+    component's directive edge is a CLAIM that must resolve against at
+    least one service's opposite-direction declaration with the same
+    structure key and a verbatim-equal directive (claim Upstream ↔
+    declaration Downstream; claim Downstream ↔ declaration Upstream).
+    Ambiguity (two declaring services) stays silent here — duplicate
+    declarations are R07's finding, one defect one finding.
     """
 
     components = corpus.components()
+    services = {
+        name: doc
+        for name, doc in components.items()
+        if isinstance(doc, dict) and doc.get("ComponentType") == "service"
+    }
+    out: list[Violation] = []
+
     downstream_members: dict[Any, set] = {}
     for name, io_field, key, nodes in _component_edges(components):
         if io_field != "Downstream":
@@ -145,7 +214,6 @@ def r03_upstream_needs_downstream_counterpart(corpus: Corpus) -> list[Violation]
         members = downstream_members.setdefault(key, set())
         members.update(node for node in nodes if _is_component_node(node))
 
-    out: list[Violation] = []
     for name, io_field, key, nodes in _component_edges(components):
         if io_field != "Upstream":
             continue
@@ -158,6 +226,29 @@ def r03_upstream_needs_downstream_counterpart(corpus: Corpus) -> list[Violation]
                     name,
                     f"{name}.Upstream[{key!r}] lists counterpart nodes but no"
                     f" component lists {name!r} in Downstream[{key!r}]",
+                    severity_of("R03"),
+                )
+            )
+
+    mirror = {"Upstream": "Downstream", "Downstream": "Upstream"}
+    declarations: dict[tuple[Any, str, str], set] = {}
+    for name, io_field, key, directive in directive_edges(services):
+        declarations.setdefault((key, directive, io_field), set()).add(name)
+
+    for name, io_field, key, directive in directive_edges(components):
+        if name in services:
+            continue
+        providers = declarations.get(
+            (key, directive, mirror[io_field]), frozenset()
+        )
+        if not providers:
+            out.append(
+                Violation(
+                    "R03",
+                    name,
+                    f"{name}.{io_field}[{key!r}] claims directive"
+                    f" {directive!r} but no service declares it in"
+                    f" {mirror[io_field]}[{key!r}]",
                     severity_of("R03"),
                 )
             )
@@ -175,6 +266,8 @@ def r04_structures_must_be_referenced(corpus: Corpus) -> list[Violation]:
     referenced = _referenced_structure_names(corpus)
     out: list[Violation] = []
     for name in sorted(corpus.structures(), key=repr):
+        if name == RESERVED_ERROR_ENVELOPE:
+            continue
         if name not in referenced:
             out.append(
                 Violation(
@@ -247,6 +340,40 @@ def r05_entrypoint_discipline(corpus: Corpus) -> list[Violation]:
                     severity_of("R05"),
                 )
             )
+    return out
+
+
+@rule("R21")
+def r21_binds_unique(corpus: Corpus) -> list[Violation]:
+    """Service Binds must be globally unique — the port allocation registry.
+
+    First claim wins (deterministic attribution mirroring R06); a later
+    service declaring the same host:port is the violation. Non-string
+    Binds values are the shape layer's findings.
+    """
+
+    components = corpus.components()
+    claimed_by: dict[str, str] = {}
+    out: list[Violation] = []
+    for name, doc in sorted(components.items(), key=lambda kv: repr(kv[0])):
+        if not (isinstance(doc, dict) and doc.get("ComponentType") == "service"):
+            continue
+        binds = doc.get("Binds")
+        if not isinstance(binds, str):
+            continue
+        if binds in claimed_by:
+            out.append(
+                Violation(
+                    "R21",
+                    name,
+                    f"Binds {binds!r} already claimed by service"
+                    f" {claimed_by[binds]!r}; host:port allocation must be"
+                    " globally unique",
+                    severity_of("R21"),
+                )
+            )
+        else:
+            claimed_by[binds] = name
     return out
 
 

@@ -21,7 +21,7 @@ from zhizong.registry import (
 
 
 def test_document_ids_come_from_grammar_invariants():
-    assert document_ids() == {f"R{i:02d}" for i in range(1, 21)}
+    assert document_ids() == {f"R{i:02d}" for i in range(1, 22)}
 
 
 def test_severity_wired_from_on_violation():

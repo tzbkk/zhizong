@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         data_root = args.data_root
     if data_root is not None and not Path(data_root).is_dir():
         data_root = None
-    location.configure_location(contracts_root, config["namespace"])
+    location.configure_location(config["namespace"])
     samples.configure_samples(contracts_root)
     disk.configure_disk(contracts_root, data_root)
 

@@ -141,7 +141,6 @@ def http_record() -> dict:
         "Type": "structure",
         "Name": "ApiPayload",
         "Description": "http payload",
-        "Location": "http://127.0.0.1:9420/api/feed",
         "Definition": {
             "Form": "record",
             "Table": [
@@ -155,6 +154,20 @@ def http_record() -> dict:
         },
     }
     return doc
+
+
+def api_service() -> dict:
+    return {
+        "SchemaVersion": 1,
+        "Type": "component",
+        "Name": "api_service",
+        "Description": "serves the feed api",
+        "ComponentType": "service",
+        "Binds": "127.0.0.1:9420",
+        "Upstream": {},
+        "Downstream": {"ApiPayload": "GET /api/feed"},
+        "Runs": "python -m api_service",
+    }
 
 
 def record_txt_structure() -> dict:
@@ -218,7 +231,7 @@ def test_r13_all_pairs_present_passes(tmp_path):
     write_sample(tmp_path, "ApiPayload.invalid.json", "{}")
     configure_samples(tmp_path)
 
-    corpus = corpus_of(feed_record(), image_record(), grammar_log(), http_record())
+    corpus = corpus_of(feed_record(), image_record(), grammar_log(), http_record(), api_service())
 
     assert r13_sample_pairs_exist(corpus) == []
 
@@ -226,7 +239,7 @@ def test_r13_all_pairs_present_passes(tmp_path):
 def test_r13_flags_each_missing_sample_file_with_derived_ext(tmp_path):
     configure_samples(tmp_path)
 
-    corpus = corpus_of(feed_record(), grammar_log(), http_record())
+    corpus = corpus_of(feed_record(), grammar_log(), http_record(), api_service())
     violations = r13_sample_pairs_exist(corpus)
 
     assert [v.rule_id for v in violations] == ["R13"] * 6
@@ -383,7 +396,7 @@ def test_r14_http_json_single_object(tmp_path):
     write_sample(tmp_path, "ApiPayload.valid.json", '{"code": 0, "extra": 9}')
     configure_samples(tmp_path)
 
-    assert r14_valid_samples_pass(corpus_of(http_record())) == []
+    assert r14_valid_samples_pass(corpus_of(http_record(), api_service())) == []
 
 
 def test_r14_skips_structures_without_sample_files(tmp_path):
@@ -445,7 +458,7 @@ def test_r15_http_json_object_passing_schema_is_flagged(tmp_path):
     write_sample(tmp_path, "ApiPayload.invalid.json", '{"code": 1}')
     configure_samples(tmp_path)
 
-    violations = r15_invalid_samples_rejected(corpus_of(http_record()))
+    violations = r15_invalid_samples_rejected(corpus_of(http_record(), api_service()))
 
     assert len(violations) == 1
     assert violations[0].doc == "ApiPayload"

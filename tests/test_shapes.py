@@ -151,3 +151,66 @@ def test_validate_shapes_requires_injected_system_grammar():
 
     with pytest.raises(RuntimeError):
         shapes.validate_shapes(corpus)
+
+
+# --------------------------- generation-2 grammar: directives, Location, Provides
+
+
+def test_shape_directive_value_accepted_in_io_map():
+    doc = base_component()
+    doc["Upstream"] = {"Job": "GET /archive/jobs/{id}"}
+    corpus = make_corpus(system_doc(), base_structure(), doc)
+
+    assert shapes.validate_shapes(corpus) == []
+
+
+def test_shape_lowercase_verb_string_rejected():
+    doc = base_component()
+    doc["Upstream"] = {"Job": "get /archive/jobs"}
+    corpus = make_corpus(system_doc(), base_structure(), doc)
+
+    assert shapes.validate_shapes(corpus) != []
+
+
+def test_shape_query_string_in_directive_rejected():
+    doc = base_component()
+    doc["Upstream"] = {"Logs": "GET /targets/x/logs?tail=5"}
+    corpus = make_corpus(system_doc(), base_structure(), doc)
+
+    assert shapes.validate_shapes(corpus) != []
+
+
+def test_shape_structure_without_location_accepted():
+    doc = base_structure()
+    del doc["Location"]
+
+    assert shapes.validate_shapes(make_corpus(system_doc(), doc, base_component())) == []
+
+
+def test_shape_http_location_rejected():
+    doc = base_structure()
+    doc["Location"] = "http://127.0.0.1:9420/api/feed"
+
+    assert shapes.validate_shapes(make_corpus(system_doc(), doc, base_component())) != []
+
+
+def test_shape_service_requires_binds_only():
+    doc = base_component()
+    doc.update({"ComponentType": "service", "Binds": "127.0.0.1:9420"})
+
+    assert shapes.validate_shapes(make_corpus(system_doc(), base_structure(), doc)) == []
+
+
+def test_shape_provides_field_rejected():
+    doc = base_component()
+    doc.update({"ComponentType": "service", "Binds": "127.0.0.1:9420"})
+    doc["Provides"] = "routes/svc.txt"
+
+    assert shapes.validate_shapes(make_corpus(system_doc(), base_structure(), doc)) != []
+
+
+def test_shape_non_service_binds_rejected():
+    doc = base_component()
+    doc["Binds"] = "127.0.0.1:9420"
+
+    assert shapes.validate_shapes(make_corpus(system_doc(), base_structure(), doc)) != []

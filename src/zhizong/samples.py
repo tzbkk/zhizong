@@ -1,10 +1,12 @@
 """Sample-pair rules R13/R14/R15 (grammar Invariants, all OnViolation: fail).
 
-R13 — a structure whose Location scheme is ``file`` or ``http`` (urn-exempt)
-      must carry BOTH ``<contracts_root>/samples/<Name>.valid.<ext>`` and
-      ``.invalid.<ext>``. Extension derivation per
-      Semantics.Samples.Extensions: http → ``json``; a file Location ending
-      ``.jsonl`` → ``jsonl``; otherwise → ``txt``.
+R13 — a structure owes a sample pair iff its Location scheme is ``file``,
+it is referenced by any http directive edge, or it is the reserved
+ErrorEnvelope (grammar R13). It must carry BOTH
+``<contracts_root>/samples/<Name>.valid.<ext>`` and ``.invalid.<ext>``.
+Extension derivation per Semantics.Samples.Extensions: directive-referenced
+structures (no file Location) are http payloads → ``json``; a file
+Location ending ``.jsonl`` → ``jsonl``; otherwise → ``txt``.
 R14 — every valid-sample entry must pass the structure's checks.
 R15 — every invalid-sample entry must be rejected; an entry that passes is
       the violation.
@@ -48,6 +50,7 @@ from typing import Any
 import jsonschema
 
 from zhizong.compile import compile_structure
+from zhizong.graph import RESERVED_ERROR_ENVELOPE, directive_referenced_structures
 from zhizong.loader import Corpus
 from zhizong.registry import Violation, rule, severity_of
 
@@ -91,14 +94,11 @@ class _Entry:
 
 @rule("R13")
 def r13_sample_pairs_exist(corpus: Corpus) -> list[Violation]:
-    """Location file/http structures must carry both sample files; urn-exempt."""
+    """Sample-pair-obligated structures must carry both sample files."""
 
     root = _require_root()
     out: list[Violation] = []
-    for name, doc in corpus.structures().items():
-        if _location_scheme(doc) not in ("file", "http"):
-            continue
-        ext = _sample_ext(doc)
+    for name, _doc, ext in _sample_obligations(corpus):
         for kind in ("valid", "invalid"):
             path = _sample_path(root, name, kind, ext)
             if not path.is_file():
@@ -130,10 +130,7 @@ def r15_invalid_samples_rejected(corpus: Corpus) -> list[Violation]:
 def _check_samples(corpus: Corpus, kind: str, rule_id: str) -> list[Violation]:
     root = _require_root()
     out: list[Violation] = []
-    for name, doc in corpus.structures().items():
-        if _location_scheme(doc) not in ("file", "http"):
-            continue
-        ext = _sample_ext(doc)
+    for name, doc, ext in _sample_obligations(corpus):
         path = _sample_path(root, name, kind, ext)
         if not path.is_file():
             continue  # existence is R13's job
@@ -183,11 +180,24 @@ def _location_scheme(doc: dict) -> str | None:
     return location.split(":", 1)[0]
 
 
-def _sample_ext(doc: dict) -> str:
-    if _location_scheme(doc) == "http":
-        return "json"
-    location = doc.get("Location", "")
-    return "jsonl" if location.endswith(".jsonl") else "txt"
+def _sample_obligations(corpus: Corpus) -> list[tuple[Any, dict, str]]:
+    """(name, doc, ext) for every structure owing a sample pair.
+
+    file Locations keep their historical extension derivation;
+    directive-referenced structures and the reserved ErrorEnvelope are
+    http payloads → ``json``.
+    """
+
+    directive_referenced = directive_referenced_structures(corpus.components())
+    out: list[tuple[Any, dict, str]] = []
+    for name, doc in corpus.structures().items():
+        if _location_scheme(doc) == "file":
+            location = doc.get("Location", "")
+            ext = "jsonl" if location.endswith(".jsonl") else "txt"
+            out.append((name, doc, ext))
+        elif name == RESERVED_ERROR_ENVELOPE or name in directive_referenced:
+            out.append((name, doc, "json"))
+    return out
 
 
 def _sample_path(root: Path, name: str, kind: str, ext: str) -> Path:

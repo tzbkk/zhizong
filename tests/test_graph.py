@@ -9,6 +9,8 @@ Parameters as {param: {Type: <structure name>}}.
 """
 
 from zhizong.graph import (
+    directive_referenced_structures,
+    is_directive,
     r01_edge_symmetry,
     r02_nodes_exist,
     r03_upstream_needs_downstream_counterpart,
@@ -16,6 +18,7 @@ from zhizong.graph import (
     r05_entrypoint_discipline,
     r17_document_names_unique,
     r20_io_keys_resolve_to_structures,
+    r21_binds_unique,
 )
 from zhizong.loader import Corpus, load_corpus
 
@@ -422,3 +425,149 @@ def test_loader_records_duplicate_names_first_wins(tmp_path):
     assert len(violations) == 1
     assert violations[0].rule_id == "R17"
     assert violations[0].doc == "dup"
+
+
+# ------------------------------------------------------- directive helpers
+
+
+def test_is_directive_matches_grammar_pattern():
+    assert is_directive("GET /archive/guilds")
+    assert is_directive("POST /archive/create")
+    assert is_directive("PUT /config")
+    assert not is_directive("get /x")
+    assert not is_directive("GET x")
+    assert not is_directive("GET /a b")
+    assert not is_directive(["GET /a"])
+    assert not is_directive("external:qq-api")
+
+
+def test_directive_referenced_structures_collects_keys():
+    svc = component(
+        "svc",
+        ComponentType="service",
+        Binds="127.0.0.1:9423",
+        Upstream={"Req": "POST /create"},
+        Downstream={"Resp": "POST /create", "List": "GET /list"},
+    )
+    assert directive_referenced_structures({"svc": svc}) == {"Req", "Resp", "List"}
+
+
+# ------------------------------ R03 directive claims (hard-role rule)
+
+
+def service_doc(name, *, binds="127.0.0.1:9423", **io):
+    return component(name, ComponentType="service", Binds=binds, **io)
+
+
+def test_r03_claim_resolves_against_opposite_direction_declaration():
+    docs = [
+        service_doc("archive", Downstream={"Job": "GET /jobs/{id}"}),
+        component("tui", ComponentType="cli", Upstream={"Job": "GET /jobs/{id}"}),
+        structure("Job"),
+    ]
+    assert r03_upstream_needs_downstream_counterpart(make_corpus(*docs)) == []
+
+
+def test_r03_request_claim_resolves_against_service_upstream():
+    docs = [
+        service_doc(
+            "archive",
+            Upstream={"CreateRequest": "POST /create"},
+            Downstream={"Created": "POST /create"},
+        ),
+        component(
+            "tui",
+            ComponentType="cli",
+            Upstream={"Created": "POST /create"},
+            Downstream={"CreateRequest": "POST /create"},
+        ),
+        structure("CreateRequest"),
+        structure("Created"),
+    ]
+    assert r03_upstream_needs_downstream_counterpart(make_corpus(*docs)) == []
+
+
+def test_r03_unresolved_claim_fails():
+    docs = [
+        component("tui", ComponentType="cli", Upstream={"Ghost": "GET /nowhere"}),
+        structure("Ghost"),
+    ]
+    violations = r03_upstream_needs_downstream_counterpart(make_corpus(*docs))
+    assert len(violations) == 1
+    v = violations[0]
+    assert v.rule_id == "R03"
+    assert v.doc == "tui"
+    assert "GET /nowhere" in v.message
+
+
+def test_r03_claim_direction_must_flip():
+    docs = [
+        service_doc("archive", Downstream={"Job": "GET /jobs"}),
+        component("tui", ComponentType="cli", Downstream={"Job": "GET /jobs"}),
+        structure("Job"),
+    ]
+    violations = r03_upstream_needs_downstream_counterpart(make_corpus(*docs))
+    assert [v.doc for v in violations] == ["tui"]
+
+
+def test_r03_claim_must_match_verbatim():
+    docs = [
+        service_doc("archive", Downstream={"Job": "GET /jobs/{id}"}),
+        component("tui", ComponentType="cli", Upstream={"Job": "GET /jobs/{name}"}),
+        structure("Job"),
+    ]
+    violations = r03_upstream_needs_downstream_counterpart(make_corpus(*docs))
+    assert [v.doc for v in violations] == ["tui"]
+
+
+def test_r03_service_declarations_never_require_resolution():
+    docs = [
+        service_doc("archive", Downstream={"Lonely": "GET /unclaimed"}),
+        structure("Lonely"),
+    ]
+    assert r03_upstream_needs_downstream_counterpart(make_corpus(*docs)) == []
+
+
+# ------------------------------------------------ R04 ErrorEnvelope exempt
+
+
+def test_r04_reserved_error_envelope_exempt():
+    envelope = structure("ErrorEnvelope", Description="corpus-global error envelope")
+    assert r04_structures_must_be_referenced(make_corpus(envelope)) == []
+
+
+def test_r04_unreferenced_structure_still_fails():
+    docs = [structure("Orphan")]
+    assert len(r04_structures_must_be_referenced(make_corpus(*docs))) == 1
+
+
+# ------------------------------------------------------- R21 Binds unique
+
+
+def test_r21_distinct_binds_pass():
+    docs = [
+        service_doc("alpha", binds="127.0.0.1:9421"),
+        service_doc("beta", binds="127.0.0.1:9422"),
+    ]
+    assert r21_binds_unique(make_corpus(*docs)) == []
+
+
+def test_r21_duplicate_binds_second_service_flagged():
+    docs = [
+        service_doc("alpha", binds="127.0.0.1:9421"),
+        service_doc("beta", binds="127.0.0.1:9421"),
+    ]
+    violations = r21_binds_unique(make_corpus(*docs))
+    assert len(violations) == 1
+    v = violations[0]
+    assert v.rule_id == "R21"
+    assert v.doc == "beta"
+    assert "alpha" in v.message
+
+
+def test_r21_ignores_non_service_components():
+    docs = [
+        service_doc("alpha", binds="127.0.0.1:9421"),
+        component("beta", ComponentType="daemon"),
+    ]
+    assert r21_binds_unique(make_corpus(*docs)) == []

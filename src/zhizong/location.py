@@ -1,11 +1,11 @@
-"""Location invariants R06-R10: template uniqueness, http wiring,
+"""Location invariants R06-R10: template uniqueness, directive wiring,
 parameter closure, scalar parameter targets, and urn addressing.
 
 Grammar statements (``zhizong/versions/1.yaml``, Definition.Invariants):
 
 * R06 (structure × structure): Location 模板展开后全局唯一。
-* R07 (structure × component): Location 为 http 时,host:port 必须命中恰一个
-  service 的 Binds,path 必须在该 service 的 Provides 规格 paths 内。
+* R07 (component × structure): http 接线由指令边承载——path 变量闭包、
+  动词方向纪律、声明唯一性(见 :func:`http_directive_wiring`)。
 * R08 (structure): Location 中每个模板变量必须在 Parameters 声明;
   Parameters 每个声明必须出现在 Location 中。
 * R09 (structure × structure): Parameters.Type 引用的结构文档必须存在且
@@ -18,68 +18,28 @@ Matching semantics:
 * A ``{var}`` template variable is recognised by the regex
   ``\\{([a-zA-Z_][a-zA-Z0-9_]*)\\}``. R06 normalisation replaces each such
   variable with the literal ``{}`` before comparing Locations globally.
-* R07 binds matching is exact string equality between the Location's
-  netloc (``host:port`` per stdlib ``urllib.parse``) and the service's
-  ``Binds`` value — no host canonicalisation (``0.0.0.0`` ≠ ``localhost``).
-  The Location's raw path component (template variables left in place)
-  must be a registered path in that service's routing table.
+* Locations are ``file:`` or ``urn:`` only — the ``http:`` scheme died in
+  generation 2 (Shapes forbids it); http wiring lives on directive edges
+  in the component I/O maps (see :mod:`zhizong.graph`).
+* R10's namespace is supplied once via :func:`configure_location`, which
+  the CLI must call before dispatching rules. A rule raises RuntimeError
+  only at the point it actually needs configuration that was never
+  supplied — corpora without scalar structures validate fine
+  unconfigured.
 
-Routing-table semantics (native format, signed by the consumer project's
-author): a service's ``Provides`` is a plain string naming a routing-table
-FILE, resolved as a path relative to the configured contracts root — same
-resolution as any other Provides artefact. Convention: a ``.txt``
-extension (e.g. ``routes/archive.txt``); the corpus loader scans only
-``*.yaml``, so routing files are deliberately invisible to it. The format
-is plain text, one route per line::
-
-    # <METHOD> <path>            full-line comments and blank lines ignored
-    GET  /archive/guilds
-    POST /archive/create
-    GET  /archive/jobs/{id}
-
-Line grammar: optional leading whitespace, a METHOD token (exactly one of
-``GET``, ``POST``, ``PUT``, ``DELETE``, ``PATCH``, uppercase), one-or-more
-whitespace, then a path token (must start with ``/``, no whitespace
-inside; ``{var}`` template segments allowed as in OpenAPI path
-templating), then nothing else — a line with any content after the path
-token is invalid (trailing comments are NOT part of the format; only
-full-line comments, whose first non-whitespace character is ``#``).
-Semantic constraints enforced at parse/load: each path may be registered
-with EXACTLY ONE method across the whole file (duplicate registration,
-same or different verb, is a violation); unknown method tokens, paths not
-starting with ``/``, and garbage after the path are parse violations.
-Parse and duplicate-registration violations are attributed to the service
-component naming the file; an unregistered Location path is attributed to
-the structure, as always. The table carries verb authority — structures
-carry no verb — so R07 checks only path registration, never method.
-
-Historical note: through v0.2.x ``Provides`` named an OpenAPI spec file
-whose ``paths`` mapping was consulted (a degraded W4-scope reading); the
-OpenAPI path is dead — a YAML file given as ``Provides`` now parses as
-routing text and almost certainly violates.
-
-Configuration: R07 needs the contracts root to resolve Provides routing
-files
-and R10 needs the urn namespace. Both are supplied once via
-:func:`configure_location`, which the CLI (T7) MUST call before dispatching
-rules. A rule raises RuntimeError only at the point it actually needs
-configuration that was never supplied — corpora without http Locations or
-scalar structures validate fine unconfigured.
-
-Documents missing a string ``Location`` (a Shapes.Document finding:
-``Location`` is required on structures) are skipped by R06/R07/R08 to avoid
-double-reporting; R09 never reads Location; R10 compares the field
-verbatim, so a scalar without any Location is reported as not matching the
-required urn.
+Documents missing a string ``Location`` (optional for structures since
+generation 2; a Shapes.Document finding only for scalar forms, via R10's
+urn comparison) are skipped by R06/R07/R08 to avoid double-reporting;
+R09 never reads Location; R10 compares the field verbatim, so a scalar
+without any Location is reported as not matching the required urn.
 """
 
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
+from zhizong.graph import directive_edges
 from zhizong.registry import Violation, rule, severity_of
 
 if TYPE_CHECKING:
@@ -87,7 +47,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "configure_location",
-    "http_cross_check",
+    "http_directive_wiring",
     "parameter_closure",
     "parameter_targets_scalar",
     "scalar_urn_location",
@@ -97,23 +57,16 @@ __all__ = [
 
 _VAR_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
-_contracts_root: Path | None = None
 _namespace: str | None = None
 
 
-def configure_location(contracts_root: Path, namespace: str) -> None:
-    """Set the module configuration consumed by R07 and R10.
+def configure_location(namespace: str) -> None:
+    """Set the urn namespace consumed by R10 (``urn:<ns>:type:<Name>``).
 
-    contracts_root: root under which R07 resolves a service's ``Provides``
-        routing-file path (relative paths are joined onto this root).
-    namespace: urn namespace for R10's expected scalar addresses
-        (``urn:<namespace>:type:<Name>``).
-
-    The CLI (T7) MUST call this once before dispatching rules.
+    The CLI must call this once before dispatching rules.
     """
 
-    global _contracts_root, _namespace
-    _contracts_root = Path(contracts_root)
+    global _namespace
     _namespace = namespace
 
 
@@ -157,190 +110,133 @@ def unique_normalized_location(corpus: Corpus) -> list[Violation]:
     return out
 
 
-_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
-
-_TABLE_OK = tuple[frozenset[str], None, tuple[()]]
-_TABLE_LOAD_ERROR = tuple[None, str, tuple[()]]
-_TABLE_LINE_ERRORS = tuple[None, None, tuple[str, ...]]
-RoutingTableResult = _TABLE_OK | _TABLE_LOAD_ERROR | _TABLE_LINE_ERRORS
+_BRACE_GROUP_RE = re.compile(r"\{([^{}]*)\}")
+_VAR_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
-def _routing_table(provides: str, cache: dict) -> RoutingTableResult:
-    """Resolve a Provides routing file → ``(paths, None, ())`` on success,
-    ``(None, load_error, ())`` when the file cannot be loaded, or
-    ``(None, None, line_errors)`` for parse/duplicate violations (native
-    plain-text format — see module docstring).
-    """
+def _path_template_vars(path: str) -> tuple[list[str], list[str]]:
+    """Split a directive path's brace groups into (valid names, malformed)."""
 
-    if _contracts_root is None:
-        raise RuntimeError(
-            "configure_location() must be called before R07 can"
-            " resolve Provides routing files"
-        )
-    table_path = _contracts_root / provides
-    key = str(table_path)
-    if key not in cache:
-        cache[key] = _parse_routing_table(table_path, provides)
-    return cache[key]
-
-
-def _parse_routing_table(table_path: Path, provides: str) -> RoutingTableResult:
-    if not table_path.is_file():
-        return (
-            None,
-            (
-                f"Provides routing file {provides!r} not found under the"
-                f" contracts root ({table_path})"
-            ),
-            (),
-        )
-    try:
-        text = table_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return (
-            None,
-            f"Provides routing file {provides!r} is not readable: {exc}",
-            (),
-        )
-    paths: set[str] = set()
-    claimed_by: dict[str, tuple[int, str]] = {}
-    errors: list[str] = []
-    for lineno, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        tokens = line.split()
-        method, rest = tokens[0], tokens[1:]
-        if method not in _METHODS:
-            errors.append(
-                f"Provides routing file {provides!r} line {lineno}:"
-                f" unknown method token {method!r}"
-                f" (must be one of {', '.join(_METHODS)})"
-            )
-            continue
-        if not rest:
-            errors.append(
-                f"Provides routing file {provides!r} line {lineno}:"
-                f" {method} route is missing its path token"
-            )
-            continue
-        path = rest[0]
-        if not path.startswith("/"):
-            errors.append(
-                f"Provides routing file {provides!r} line {lineno}:"
-                f" path {path!r} must start with '/'"
-            )
-            continue
-        if len(rest) > 1:
-            errors.append(
-                f"Provides routing file {provides!r} line {lineno}:"
-                f" trailing content {' '.join(rest[1:])!r} after path"
-                f" {path!r} (trailing comments are not part of the format)"
-            )
-            continue
-        if path in claimed_by:
-            first_lineno, first_method = claimed_by[path]
-            errors.append(
-                f"Provides routing file {provides!r} line {lineno}:"
-                f" path {path!r} already registered on line {first_lineno}"
-                f" ({first_method}); each path may be registered with"
-                " exactly one method"
-            )
-            continue
-        claimed_by[path] = (lineno, method)
-        paths.add(path)
-    if errors:
-        return (None, None, tuple(errors))
-    return (frozenset(paths), None, ())
+    names: list[str] = []
+    malformed: list[str] = []
+    for raw in _BRACE_GROUP_RE.findall(path):
+        if _VAR_NAME_RE.match(raw):
+            names.append(raw)
+        else:
+            malformed.append(raw)
+    return names, malformed
 
 
 @rule("R07")
-def http_cross_check(corpus: Corpus) -> list[Violation]:
-    """R07: http Locations must be wired to exactly one service.
+def http_directive_wiring(corpus: Corpus) -> list[Violation]:
+    """R07 (generation 2): directive-path closure and declaration uniqueness.
 
-    For a Location starting ``http:``: its netloc (``host:port``) must equal
-    exactly one service component's ``Binds``; the Location's raw path
-    (template variables left in place) must be registered in that service's
-    ``Provides`` routing table (native plain-text format — see module
-    docstring). Routing-table parse errors and duplicate registrations are
-    attributed to the service component; an unregistered path is attributed
-    to the structure.
+    One finding per defect, attribution per grammar:
+    - path ``{var}`` closure — every identifier-shaped variable of a
+      directive path must be declared in the keyed structure's
+      Parameters; checked once per unique (structure, directive) pair,
+      attributed to the structure. Malformed brace groups are flagged
+      alongside; Parameters.Type validity stays R09's job. A structure
+      on several directives closes against their union naturally (no
+      reverse requirement).
+    - verb-direction discipline — GET/DELETE never in a service's
+      Upstream (no request-body semantics); attributed to the service.
+    - per-service intra-direction uniqueness — one directive under at
+      most one structure key per (service, direction).
+    - cross-service uniqueness — a (structure, directive, direction)
+      triple belongs to at most one service; first claim wins, the later
+      service is flagged (claims would otherwise be ambiguous).
     """
 
-    severity = severity_of("R07")
+    components = corpus.components()
+    structures = corpus.structures()
     services = {
-        name: doc
-        for name, doc in corpus.components().items()
+        name
+        for name, doc in components.items()
         if isinstance(doc, dict) and doc.get("ComponentType") == "service"
     }
-    table_cache: dict = {}
-    tables_reported: set[str] = set()
+    severity = severity_of("R07")
     out: list[Violation] = []
-    for name, doc in corpus.structures().items():
-        location = doc.get("Location")
-        if not (isinstance(location, str) and location.startswith("http:")):
+
+    pairs: dict[tuple[object, str], None] = {}
+    intra_seen: dict[tuple[object, str, str], object] = {}
+    cross_seen: dict[tuple[object, str, str], object] = {}
+    for name, io_field, key, directive in directive_edges(components):
+        pairs.setdefault((key, directive))
+        method, _, _path = directive.partition(" ")
+        if name not in services:
             continue
-        parts = urlparse(location)
-        matches = sorted(
-            n for n, d in services.items() if d.get("Binds") == parts.netloc
-        )
-        if not matches:
+        if io_field == "Upstream" and method in ("GET", "DELETE"):
             out.append(
                 Violation(
                     "R07",
                     name,
-                    f"http Location {location!r}: host:port"
-                    f" {parts.netloc!r} does not hit any service's Binds",
+                    f"service {name!r} declares {method} directive"
+                    f" {directive!r} in Upstream — GET/DELETE carry no"
+                    " request body",
                     severity,
                 )
             )
-            continue
-        if len(matches) > 1:
+        intra_key = (name, io_field, directive)
+        if intra_key in intra_seen:
             out.append(
                 Violation(
                     "R07",
                     name,
-                    f"http Location {location!r}: host:port"
-                    f" {parts.netloc!r} hits Binds of {len(matches)}"
-                    f" services ({', '.join(matches)}); must hit exactly one",
+                    f"{name}.{io_field} declares directive {directive!r}"
+                    f" under both structures {intra_seen[intra_key]!r} and"
+                    f" {key!r}; one route one structure per direction",
                     severity,
                 )
             )
-            continue
-        service = matches[0]
-        provides = services[service].get("Provides")
-        if not isinstance(provides, str) or not provides:
-            continue  # missing/empty Provides is a Shapes.Document finding
-        paths, load_error, line_errors = _routing_table(provides, table_cache)
-        if paths is None:
-            if load_error is not None:
+        else:
+            intra_seen[intra_key] = key
+        cross_key = (key, directive, io_field)
+        if cross_key in cross_seen:
+            out.append(
+                Violation(
+                    "R07",
+                    name,
+                    f"directive {directive!r} for structure {key!r} in"
+                    f" {io_field} already declared by service"
+                    f" {cross_seen[cross_key]!r} — claims would be"
+                    " ambiguous",
+                    severity,
+                )
+            )
+        else:
+            cross_seen[cross_key] = name
+
+    for key, directive in pairs:
+        doc = structures.get(key)
+        if not isinstance(doc, dict):
+            continue  # R20's finding
+        params = doc.get("Parameters")
+        if not isinstance(params, dict):
+            params = {}
+        _method, _, path = directive.partition(" ")
+        names, malformed = _path_template_vars(path)
+        for raw in malformed:
+            out.append(
+                Violation(
+                    "R07",
+                    key,
+                    f"directive {directive!r} path template variable"
+                    f" {{{raw}}} is not a valid identifier",
+                    severity,
+                )
+            )
+        for var in names:
+            if var not in params:
                 out.append(
                     Violation(
                         "R07",
-                        name,
-                        f"http Location {location!r} via service"
-                        f" {service!r}: {load_error}",
+                        key,
+                        f"directive {directive!r} path variable"
+                        f" {{{var}}} is not declared in Parameters",
                         severity,
                     )
                 )
-            elif line_errors and service not in tables_reported:
-                tables_reported.add(service)
-                out.extend(
-                    Violation("R07", service, error, severity)
-                    for error in line_errors
-                )
-            continue
-        if parts.path not in paths:
-            out.append(
-                Violation(
-                    "R07",
-                    name,
-                    f"http Location {location!r}: path {parts.path!r} is"
-                    f" not among the registered paths of service"
-                    f" {service!r}'s Provides routing file {provides!r}",
-                    severity,
-                )
-            )
     return out
 
 

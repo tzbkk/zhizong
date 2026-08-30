@@ -18,8 +18,8 @@ def test_bootstrap_invariants_count():
         doc = yaml.safe_load(f)
 
     invariants = doc["Definition"]["Invariants"]
-    assert len(invariants) == 20, f"Expected 20 invariants, got {len(invariants)}"
+    assert len(invariants) == 21, f"Expected 21 invariants, got {len(invariants)}"
 
-    expected_ids = {f"R{i:02d}" for i in range(1, 21)}
+    expected_ids = {f"R{i:02d}" for i in range(1, 22)}
     actual_ids = {inv["Id"] for inv in invariants}
     assert actual_ids == expected_ids, f"Expected IDs {expected_ids}, got {actual_ids}"

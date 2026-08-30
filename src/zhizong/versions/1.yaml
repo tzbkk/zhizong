@@ -3,9 +3,11 @@ Type: version
 Name: 1
 Description: >-
   契约文档格式第 1 代,也是该格式的唯一定义源。contracts/ 下每一份文档——
-  包括本文档自身——都必须通过 Definition.Shapes 的校验。本文档不可变:
-  任何格式变更必须新开 Name: 2 的 version 文档,由各文档经 SchemaVersion
-  字段显式声明所循代次。强制力全部落在两层机器结构上:Shapes(JSON Schema
+  包括本文档自身——都必须通过 Definition.Shapes 的校验。生命周期政策
+  (0.4.0 裁决):0.x alpha 阶段本文档允许原地演进,逐版修订以 git diff
+  为署名物;自 1.0.0 起包版本与宪法代次严格对齐,格式变更必须新开
+  Name: N+1 的 version 文档,由各文档经 SchemaVersion 字段显式声明
+  所循代次。强制力全部落在两层机器结构上:Shapes(JSON Schema
   2020-12,单文档形状)与 Invariants(编号规则,跨文档不变量);Semantics
   为非规范人读层,不承担强制力。
 
@@ -21,7 +23,7 @@ Definition:
         Type: {enum: [structure, component, version]}
         Name: {}
         Description: {type: string, minLength: 1}
-        Location: {type: string, pattern: '^(file|http|urn):'}
+        Location: {type: string, pattern: '^(file|urn):'}
         Parameters:
           type: object
           additionalProperties:
@@ -36,7 +38,6 @@ Definition:
         Upstream: {$ref: '#/$defs/IoMap'}
         Downstream: {$ref: '#/$defs/IoMap'}
         Binds: {type: string, pattern: '^[A-Za-z0-9.\-]+:[0-9]+$'}
-        Provides: {type: string, minLength: 1}
         Runs: {type: string, minLength: 1}
         role: {const: entrypoint}
       allOf:
@@ -47,7 +48,7 @@ Definition:
               Definition: {type: object}
         - if: {properties: {Type: {const: structure}}, required: [Type]}
           then:
-            required: [Location, Definition]
+            required: [Definition]
             properties:
               Name: {type: string, minLength: 1}
               Definition:
@@ -80,8 +81,8 @@ Definition:
               Name: {type: string, minLength: 1}
             allOf:
               - if: {properties: {ComponentType: {const: service}}, required: [ComponentType]}
-                then: {required: [Binds, Provides]}
-                else: {properties: {Binds: false, Provides: false}}
+                then: {required: [Binds]}
+                else: {properties: {Binds: false}}
               - if:
                   properties: {ComponentType: {enum: [daemon, service, cli, tui, ci]}}
                   required: [ComponentType]
@@ -101,14 +102,17 @@ Definition:
         IoMap:
           type: object
           additionalProperties:
-            type: array
-            items: {type: string, minLength: 1}
+            anyOf:
+              - type: array
+                items: {type: string, minLength: 1}
+              - type: string
+                pattern: '^(GET|POST|PUT|DELETE|PATCH) /[^ ?#]*$'
 
   Invariants:
     - Id: R01
       OnViolation: fail
       Scope: component × component
-      Statement: "A.Upstream[S] 含节点 B 时,B.Downstream[S] 必含 A;反之亦然"
+      Statement: "值为节点名单时:A.Upstream[S] 含节点 B 则 B.Downstream[S] 必含 A,反之亦然;值为 http 指令时不适用(归 R03)"
     - Id: R02
       OnViolation: fail
       Scope: component
@@ -116,11 +120,11 @@ Definition:
     - Id: R03
       OnViolation: fail
       Scope: component × structure
-      Statement: "每个 Upstream 键 S:值为空列表(对端为文件)合法;否则必须存在组件 X 使 X.Downstream[S] 含本组件"
+      Statement: "值为空列表(对端为文件)合法;值为节点名单时必须存在组件 X 使 X.Downstream[S] 含本组件(纯 external: 名单豁免);值为 http 指令时(硬角色法):service 上的指令边为声明免归位,非 service 上的指令边为认领,必须与某 service 的反方向同键同指令声明逐字相等——认领 Upstream 对声明 Downstream,认领 Downstream 对声明 Upstream"
     - Id: R04
       OnViolation: fail
       Scope: structure
-      Statement: "未被任何组件 I/O 键或 Parameters.Type 引用的结构文档无效;被 Parameters.Type 引用的标量豁免"
+      Statement: "未被任何组件 I/O 键或 Parameters.Type 引用的结构文档无效;被 Parameters.Type 引用的标量豁免;保留名 ErrorEnvelope(全局 http 错误信封)豁免"
     - Id: R05
       OnViolation: fail
       Scope: component
@@ -131,8 +135,8 @@ Definition:
       Statement: "Location 模板展开后全局唯一"
     - Id: R07
       OnViolation: fail
-      Scope: structure × component
-      Statement: "Location 为 http 时,host:port 必须命中恰一个 service 的 Binds,path 必须在该 service 的 Provides 规格 paths 内"
+      Scope: component × structure
+      Statement: "http 接线由指令边承载:指令 path 的每个 {var} 必须在键结构文档的 Parameters 声明(变量名须为标识符);GET/DELETE 指令不得出现在 service.Upstream(无请求体语义);同一 service 同方向内一条指令至多一键;同一 (键,指令) 不得由两个 service 同方向声明(认领歧义);Location 的 http: 方案已废弃(由 Shapes 禁止)"
     - Id: R08
       OnViolation: fail
       Scope: structure
@@ -156,7 +160,7 @@ Definition:
     - Id: R13
       OnViolation: fail
       Scope: structure
-      Statement: "Location 为 file 或 http 的结构,<contracts_root>/samples/<Name>.valid.<ext> 与 .invalid.<ext> 必须成对存在;urn 豁免"
+      Statement: "样本对义务结构 = Location 为 file 的结构 ∨ 被任何 http 指令边引用的结构 ∨ 保留名 ErrorEnvelope;<contracts_root>/samples/<Name>.valid.<ext> 与 .invalid.<ext> 必须成对存在;urn-only 且未被指令边引用的结构豁免;无 file Location(指令边引用)的样本扩展名为 json"
     - Id: R14
       OnViolation: fail
       Scope: structure
@@ -185,6 +189,10 @@ Definition:
       OnViolation: fail
       Scope: document × component
       Statement: "结构文档作为 I/O 键被引用时,其 Name 必须与键一致且文档存在"
+    - Id: R21
+      OnViolation: fail
+      Scope: component
+      Statement: "service 的 Binds 全语料唯一——端口分配登记处,两个 service 不得声明同一 host:port"
 
   Semantics:
     Normative: false
@@ -210,6 +218,10 @@ Definition:
     NodeSyntax:
       Kind: [组件名, "external:源名"]
       EmptyList: 值为空列表表示对端为文件本身——结构经自身Location落盘/读回,无进程对端
+      HttpDirective: "值为 'METHOD /path' 字符串时为 http 边——service 上是声明(路由表面,可无消费者),非 service 上是认领(必须归位到恰一个 service 的反方向同键同指令声明);请求体=发出方 Downstream,响应=流入方 Upstream;动词权威在指令,结构不带动词;同一 service 同 (键,指令) 可同挂两方向(双向载荷,如 PUT /config);path {var} 须在键结构 Parameters 声明且 Type 指向 scalar;query 参数不建模(留行为测试)"
+    HttpEnvelope:
+      ReservedName: ErrorEnvelope
+      Note: 保留名结构,隐式适用于全部 http 路由的错误响应形状(如 {error:{code,message}});R04 豁免、R13 强制样本对;不逐路由挂边——与具体路由的接线由消费方活体 harness 执法
     Lifecycle:
       append-only: 只追加(feeds.jsonl类);增量归档切片依赖此语义
       rewrite-in-place: 整文件重写

@@ -25,7 +25,8 @@ def write_yaml(path, doc):
 
 def build_green_corpus(root):
     """A minimal REAL corpus: service + cli components, three structures,
-    a routing table, sample pairs, and the R11 fixture tree."""
+    a directive edge (declaration + claim), sample pairs, and the R11
+    fixture tree."""
 
     contracts = root / "contracts"
     write_yaml(root / ".zhizong.yaml", {"namespace": NAMESPACE})
@@ -38,9 +39,8 @@ def build_green_corpus(root):
             "Description": "feed api service",
             "ComponentType": "service",
             "Binds": "127.0.0.1:9420",
-            "Provides": "routes/svc.txt",
             "Upstream": {"feed": []},
-            "Downstream": {"api": ["cli"]},
+            "Downstream": {"api": "GET /api/feed"},
             "Runs": "python -m svc",
         },
     )
@@ -52,7 +52,7 @@ def build_green_corpus(root):
             "Name": "cli",
             "Description": "feed archiver cli",
             "ComponentType": "cli",
-            "Upstream": {"api": ["svc"]},
+            "Upstream": {"api": "GET /api/feed"},
             "Downstream": {"feed": []},
             "Runs": "python -m cli",
         },
@@ -86,7 +86,6 @@ def build_green_corpus(root):
             "Type": "structure",
             "Name": "api",
             "Description": "feed api response",
-            "Location": "http://127.0.0.1:9420/api/feed",
             "Definition": {
                 "Form": "record",
                 "Table": [
@@ -111,10 +110,6 @@ def build_green_corpus(root):
             "Definition": {"Form": "scalar", "Base": "string", "Pattern": "^[0-9]+$"},
         },
     )
-    routes = contracts / "routes" / "svc.txt"
-    routes.parent.mkdir(parents=True, exist_ok=True)
-    routes.write_text("GET /api/feed\n", encoding="utf-8")
-
     samples = contracts / "samples"
     samples.mkdir(parents=True, exist_ok=True)
     (samples / "feed.valid.jsonl").write_text('{"id": "f1"}\n', encoding="utf-8")

@@ -1,4 +1,4 @@
-"""Location rule tests: R06-R10 — template uniqueness, http wiring,
+"""Location rule tests: R06-R10 — template uniqueness, directive wiring,
 parameter closure, scalar targets, urn addresses."""
 
 import pytest
@@ -7,7 +7,7 @@ import yaml
 from zhizong.loader import load_corpus
 from zhizong.location import (
     configure_location,
-    http_cross_check,
+    http_directive_wiring,
     parameter_closure,
     parameter_targets_scalar,
     scalar_urn_location,
@@ -18,8 +18,8 @@ NAMESPACE = "demo"
 
 
 @pytest.fixture(autouse=True)
-def _configured(tmp_path):
-    configure_location(tmp_path, NAMESPACE)
+def _configured():
+    configure_location(NAMESPACE)
 
 
 def write(root, filename, doc):
@@ -42,15 +42,16 @@ def structure(name, location, *, form="record", parameters=None):
         "Type": "structure",
         "Name": name,
         "Description": f"{name} records",
-        "Location": location,
         "Definition": definition,
     }
+    if location is not None:
+        doc["Location"] = location
     if parameters is not None:
         doc["Parameters"] = parameters
     return doc
 
 
-def service(name, *, binds="localhost:8080", provides="routes/gateway.txt"):
+def service(name, *, binds="localhost:8080", upstream=None, downstream=None):
     return {
         "SchemaVersion": 1,
         "Type": "component",
@@ -58,17 +59,23 @@ def service(name, *, binds="localhost:8080", provides="routes/gateway.txt"):
         "Description": f"{name} service",
         "ComponentType": "service",
         "Binds": binds,
-        "Provides": provides,
-        "Upstream": {},
-        "Downstream": {},
+        "Upstream": upstream or {},
+        "Downstream": downstream or {},
         "Runs": f"python -m {name}",
     }
 
 
-def write_routes(root, rel, text):
-    path = root / rel
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+def consumer(name, *, upstream=None, downstream=None, ctype="cli"):
+    return {
+        "SchemaVersion": 1,
+        "Type": "component",
+        "Name": name,
+        "Description": f"{name} {ctype}",
+        "ComponentType": ctype,
+        "Upstream": upstream or {},
+        "Downstream": downstream or {},
+        "Runs": name,
+    }
 
 
 # --- R06: uniqueness after template normalization ---
@@ -100,299 +107,236 @@ def test_r06_template_normalization_collision(tmp_path):
     assert "chanX" in v.message
 
 
-# --- R07: http cross-check against service Binds/Provides routing tables ---
+# --- R07: directive wiring — closure, verb discipline, uniqueness ---
 
 
-def test_r07_http_hits_single_service_and_path_registered(tmp_path):
-    write(tmp_path, "gateway", service("gateway"))
-    write_routes(tmp_path, "routes/gateway.txt", "GET /api/feeds\n")
-    write(
-        tmp_path,
-        "snapshot",
-        structure("snapshot", "http://localhost:8080/api/feeds"),
-    )
-
-    assert http_cross_check(load_corpus(tmp_path)) == []
-
-
-def test_r07_template_path_variable_matches_raw_location(tmp_path):
+def test_r07_path_variable_declared_passes(tmp_path):
     write(
         tmp_path,
         "archive",
-        service("archive", provides="routes/archive.txt"),
+        service("archive", downstream={"Job": "GET /archive/jobs/{id}"}),
     )
-    write_routes(tmp_path, "routes/archive.txt", "GET /archive/jobs/{id}\n")
     write(
         tmp_path,
         "job",
-        structure("job", "http://localhost:8080/archive/jobs/{id}"),
+        structure("Job", None, parameters={"id": {"Type": "JobId"}}),
     )
 
-    assert http_cross_check(load_corpus(tmp_path)) == []
+    assert http_directive_wiring(load_corpus(tmp_path)) == []
 
 
-def test_r07_comments_and_blank_lines_ignored(tmp_path):
-    write(tmp_path, "gateway", service("gateway"))
-    write_routes(
-        tmp_path,
-        "routes/gateway.txt",
-        "# gateway routing table\n"
-        "\n"
-        "   \n"
-        "GET /api/feeds\n"
-        "# POST /archive/create\n",
-    )
+def test_r07_path_variable_not_declared_in_parameters(tmp_path):
     write(
         tmp_path,
-        "snapshot",
-        structure("snapshot", "http://localhost:8080/api/feeds"),
+        "archive",
+        service("archive", downstream={"Job": "GET /archive/jobs/{id}"}),
     )
+    write(tmp_path, "job", structure("Job", None))
 
-    assert http_cross_check(load_corpus(tmp_path)) == []
-
-
-def test_r07_path_not_registered(tmp_path):
-    write(tmp_path, "gateway", service("gateway"))
-    write_routes(tmp_path, "routes/gateway.txt", "POST /api/other\n")
-    write(
-        tmp_path,
-        "snapshot",
-        structure("snapshot", "http://localhost:8080/api/feeds"),
-    )
-
-    violations = http_cross_check(load_corpus(tmp_path))
+    violations = http_directive_wiring(load_corpus(tmp_path))
 
     assert len(violations) == 1
     v = violations[0]
     assert v.rule_id == "R07"
-    assert v.doc == "snapshot"
+    assert v.doc == "Job"
     assert v.severity == "fail"
-    assert "/api/feeds" in v.message
-    assert "routes/gateway.txt" in v.message
+    assert "{id}" in v.message
+    assert "Parameters" in v.message
 
 
-def test_r07_two_services_bind_same_host_port(tmp_path):
-    write(tmp_path, "a_gateway", service("gateway"))
-    write(tmp_path, "b_gateway2", service("gateway2"))
+def test_r07_malformed_variable_name_flagged(tmp_path):
     write(
         tmp_path,
-        "c_snapshot",
-        structure("snapshot", "http://localhost:8080/api/feeds"),
+        "archive",
+        service("archive", downstream={"Job": "GET /archive/jobs/{bad-id}"}),
     )
+    write(tmp_path, "job", structure("Job", None))
 
-    violations = http_cross_check(load_corpus(tmp_path))
-
-    assert len(violations) == 1
-    v = violations[0]
-    assert v.rule_id == "R07"
-    assert v.doc == "snapshot"
-    assert "exactly one" in v.message
-    assert "gateway" in v.message and "gateway2" in v.message
-
-
-def test_r07_no_service_binds_host_port(tmp_path):
-    write(tmp_path, "gateway", service("gateway"))
-    write(
-        tmp_path,
-        "snapshot",
-        structure("snapshot", "http://localhost:9999/api/feeds"),
-    )
-
-    violations = http_cross_check(load_corpus(tmp_path))
+    violations = http_directive_wiring(load_corpus(tmp_path))
 
     assert [v.rule_id for v in violations] == ["R07"]
-    assert violations[0].doc == "snapshot"
-    assert "localhost:9999" in violations[0].message
+    assert violations[0].doc == "Job"
+    assert "{bad-id}" in violations[0].message
+    assert "identifier" in violations[0].message
 
 
-def test_r07_provides_routing_file_missing(tmp_path):
-    write(
-        tmp_path, "gateway", service("gateway", provides="routes/missing.txt")
-    )
+def test_r07_static_path_needs_no_parameters(tmp_path):
     write(
         tmp_path,
-        "snapshot",
-        structure("snapshot", "http://localhost:8080/api/feeds"),
+        "archive",
+        service("archive", downstream={"List": "GET /archive/guilds"}),
     )
+    write(tmp_path, "list", structure("List", None))
 
-    violations = http_cross_check(load_corpus(tmp_path))
-
-    assert [v.rule_id for v in violations] == ["R07"]
-    assert violations[0].doc == "snapshot"
-    assert "routes/missing.txt" in violations[0].message
+    assert http_directive_wiring(load_corpus(tmp_path)) == []
 
 
-def test_r07_duplicate_path_same_method(tmp_path):
-    write(tmp_path, "gateway", service("gateway"))
-    write_routes(
-        tmp_path,
-        "routes/gateway.txt",
-        "GET /api/feeds\nGET /api/feeds\n",
-    )
+def test_r07_get_in_service_upstream_rejected(tmp_path):
     write(
         tmp_path,
-        "snapshot",
-        structure("snapshot", "http://localhost:8080/api/feeds"),
+        "archive",
+        service("archive", upstream={"Job": "GET /archive/jobs"}),
     )
+    write(tmp_path, "job", structure("Job", None))
 
-    violations = http_cross_check(load_corpus(tmp_path))
+    violations = http_directive_wiring(load_corpus(tmp_path))
 
     assert [v.rule_id for v in violations] == ["R07"]
     v = violations[0]
-    assert v.doc == "gateway"
-    assert "already registered" in v.message
-    assert "line 2" in v.message
+    assert v.doc == "archive"
+    assert "GET" in v.message
+    assert "no request body" in v.message
 
 
-def test_r07_duplicate_path_different_method(tmp_path):
-    write(tmp_path, "gateway", service("gateway"))
-    write_routes(
-        tmp_path,
-        "routes/gateway.txt",
-        "GET /api/feeds\nPOST /api/feeds\n",
-    )
+def test_r07_delete_in_service_upstream_rejected(tmp_path):
     write(
         tmp_path,
-        "snapshot",
-        structure("snapshot", "http://localhost:8080/api/feeds"),
+        "archive",
+        service("archive", upstream={"Gone": "DELETE /archive/jobs"}),
     )
+    write(tmp_path, "gone", structure("Gone", None))
 
-    violations = http_cross_check(load_corpus(tmp_path))
+    violations = http_directive_wiring(load_corpus(tmp_path))
+
+    assert [v.rule_id for v in violations] == ["R07"]
+    assert violations[0].doc == "archive"
+    assert "DELETE" in violations[0].message
+
+
+def test_r07_post_in_service_upstream_is_request_body(tmp_path):
+    write(
+        tmp_path,
+        "archive",
+        service(
+            "archive",
+            upstream={"CreateJobRequest": "POST /archive/create"},
+            downstream={"JobCreated": "POST /archive/create"},
+        ),
+    )
+    write(tmp_path, "req", structure("CreateJobRequest", None))
+    write(tmp_path, "resp", structure("JobCreated", None))
+
+    assert http_directive_wiring(load_corpus(tmp_path)) == []
+
+
+def test_r07_bidirectional_payload_allowed(tmp_path):
+    write(
+        tmp_path,
+        "launcher",
+        service(
+            "launcher",
+            upstream={"Config": "PUT /config"},
+            downstream={"Config": "PUT /config"},
+        ),
+    )
+    write(tmp_path, "config", structure("Config", None))
+
+    assert http_directive_wiring(load_corpus(tmp_path)) == []
+
+
+def test_r07_one_directive_two_keys_same_direction_rejected(tmp_path):
+    write(
+        tmp_path,
+        "archive",
+        service(
+            "archive",
+            downstream={
+                "JobA": "GET /archive/jobs",
+                "JobB": "GET /archive/jobs",
+            },
+        ),
+    )
+    write(tmp_path, "joba", structure("JobA", None))
+    write(tmp_path, "jobb", structure("JobB", None))
+
+    violations = http_directive_wiring(load_corpus(tmp_path))
 
     assert [v.rule_id for v in violations] == ["R07"]
     v = violations[0]
-    assert v.doc == "gateway"
-    assert "already registered on line 1 (GET)" in v.message
+    assert v.doc == "archive"
+    assert "one route one structure" in v.message
+    assert "JobA" in v.message and "JobB" in v.message
 
 
-def test_r07_unknown_method_token(tmp_path):
-    write(tmp_path, "gateway", service("gateway"))
-    write_routes(
+def test_r07_two_services_same_directive_same_direction_rejected(tmp_path):
+    write(
         tmp_path,
-        "routes/gateway.txt",
-        "GET /api/feeds\nFETCH /api/x\n",
+        "a_alpha",
+        service("alpha", downstream={"List": "GET /shared/list"}),
     )
     write(
         tmp_path,
-        "snapshot",
-        structure("snapshot", "http://localhost:8080/api/feeds"),
+        "b_beta",
+        service("beta", binds="localhost:8081", downstream={"List": "GET /shared/list"}),
     )
+    write(tmp_path, "list", structure("List", None))
 
-    violations = http_cross_check(load_corpus(tmp_path))
+    violations = http_directive_wiring(load_corpus(tmp_path))
 
     assert [v.rule_id for v in violations] == ["R07"]
     v = violations[0]
-    assert v.doc == "gateway"
-    assert "line 2" in v.message
-    assert "FETCH" in v.message
-    assert "routes/gateway.txt" in v.message
+    assert v.doc == "beta"
+    assert "alpha" in v.message
+    assert "ambiguous" in v.message
 
 
-def test_r07_path_not_starting_with_slash(tmp_path):
-    write(tmp_path, "gateway", service("gateway"))
-    write_routes(tmp_path, "routes/gateway.txt", "GET api/feeds\n")
+def test_r07_two_services_same_directive_opposite_directions_pass(tmp_path):
     write(
         tmp_path,
-        "snapshot",
-        structure("snapshot", "http://localhost:8080/api/feeds"),
-    )
-
-    violations = http_cross_check(load_corpus(tmp_path))
-
-    assert [v.rule_id for v in violations] == ["R07"]
-    v = violations[0]
-    assert v.doc == "gateway"
-    assert "line 1" in v.message
-    assert "must start with '/'" in v.message
-
-
-def test_r07_trailing_content_after_path(tmp_path):
-    write(tmp_path, "gateway", service("gateway"))
-    write_routes(tmp_path, "routes/gateway.txt", "GET /api/feeds y\n")
-    write(
-        tmp_path,
-        "snapshot",
-        structure("snapshot", "http://localhost:8080/api/feeds"),
-    )
-
-    violations = http_cross_check(load_corpus(tmp_path))
-
-    assert [v.rule_id for v in violations] == ["R07"]
-    v = violations[0]
-    assert v.doc == "gateway"
-    assert "line 1" in v.message
-    assert "trailing content" in v.message
-
-
-def test_r07_route_without_path_token(tmp_path):
-    write(tmp_path, "gateway", service("gateway"))
-    write_routes(tmp_path, "routes/gateway.txt", "GET\n")
-    write(
-        tmp_path,
-        "snapshot",
-        structure("snapshot", "http://localhost:8080/api/feeds"),
-    )
-
-    violations = http_cross_check(load_corpus(tmp_path))
-
-    assert [v.rule_id for v in violations] == ["R07"]
-    v = violations[0]
-    assert v.doc == "gateway"
-    assert "line 1" in v.message
-    assert "missing its path token" in v.message
-
-
-def test_r07_routing_table_errors_reported_once_per_service(tmp_path):
-    write(tmp_path, "gateway", service("gateway"))
-    write_routes(tmp_path, "routes/gateway.txt", "FETCH /api/x\n")
-    write(
-        tmp_path,
-        "a_snap1",
-        structure("snap1", "http://localhost:8080/api/feeds"),
+        "a_alpha",
+        service("alpha", upstream={"X": "POST /relay"}),
     )
     write(
         tmp_path,
-        "b_snap2",
-        structure("snap2", "http://localhost:8080/api/other"),
+        "b_beta",
+        service("beta", binds="localhost:8081", downstream={"X": "POST /relay"}),
     )
+    write(tmp_path, "x", structure("X", None))
 
-    violations = http_cross_check(load_corpus(tmp_path))
-
-    assert [v.doc for v in violations] == ["gateway"]
-    assert all(v.rule_id == "R07" for v in violations)
+    assert http_directive_wiring(load_corpus(tmp_path)) == []
 
 
-def test_r07_openapi_yaml_provides_is_now_a_parse_violation(tmp_path):
+def test_r07_union_closure_across_directives(tmp_path):
     write(
-        tmp_path, "gateway", service("gateway", provides="specs/gateway.yaml")
-    )
-    specs = tmp_path / "specs"
-    specs.mkdir()
-    (specs / "gateway.yaml").write_text(
-        "openapi: 3.1.0\n"
-        "info:\n"
-        "  title: gateway\n"
-        "paths:\n"
-        "  /api/feeds:\n"
-        "    get:\n"
-        "      responses:\n"
-        "        '200':\n"
-        "          description: ok\n",
-        encoding="utf-8",
+        tmp_path,
+        "launcher",
+        service(
+            "launcher",
+            downstream={
+                "Config": "GET /config/{section}",
+                "Audit": "GET /audit",
+            },
+        ),
     )
     write(
         tmp_path,
-        "snapshot",
-        structure("snapshot", "http://localhost:8080/api/feeds"),
+        "config",
+        structure("Config", None, parameters={"section": {"Type": "Section"}}),
+    )
+    write(tmp_path, "audit", structure("Audit", None))
+
+    assert http_directive_wiring(load_corpus(tmp_path)) == []
+
+
+def test_r07_unresolved_claims_are_r03s_job(tmp_path):
+    write(
+        tmp_path,
+        "tui",
+        consumer("tui", upstream={"Ghost": "GET /nowhere"}),
+    )
+    write(tmp_path, "ghost", structure("Ghost", None))
+
+    assert http_directive_wiring(load_corpus(tmp_path)) == []
+
+
+def test_r07_missing_structure_key_left_to_r20(tmp_path):
+    write(
+        tmp_path,
+        "archive",
+        service("archive", downstream={"NoSuch": "GET /archive/x"}),
     )
 
-    violations = http_cross_check(load_corpus(tmp_path))
-
-    assert violations
-    assert all(v.rule_id == "R07" for v in violations)
-    assert all(v.doc == "gateway" for v in violations)
-    assert any("line" in v.message for v in violations)
-    assert "specs/gateway.yaml" in violations[0].message
+    assert http_directive_wiring(load_corpus(tmp_path)) == []
 
 
 # --- R08: parameter closure, both directions ---
@@ -443,6 +387,12 @@ def test_r08_declared_but_unused_parameter(tmp_path):
     assert v.doc == "feeds"
     assert v.severity == "fail"
     assert "limit" in v.message
+
+
+def test_r08_locationless_structure_skipped(tmp_path):
+    write(tmp_path, "job", structure("Job", None, parameters={"id": {"Type": "JobId"}}))
+
+    assert parameter_closure(load_corpus(tmp_path)) == []
 
 
 # --- R09: Parameters.Type targets must be existing scalar structures ---
@@ -541,9 +491,9 @@ def test_r10_namespace_comes_from_configuration(tmp_path):
         structure("GuildId", "urn:other:type:GuildId", form="scalar"),
     )
 
-    configure_location(tmp_path, "other")
+    configure_location("other")
     assert scalar_urn_location(load_corpus(tmp_path)) == []
 
-    configure_location(tmp_path, NAMESPACE)
+    configure_location(NAMESPACE)
     violations = scalar_urn_location(load_corpus(tmp_path))
     assert [v.doc for v in violations] == ["GuildId"]
