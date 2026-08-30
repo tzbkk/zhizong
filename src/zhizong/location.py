@@ -242,13 +242,18 @@ def http_directive_wiring(corpus: Corpus) -> list[Violation]:
 
 @rule("R08")
 def parameter_closure(corpus: Corpus) -> list[Violation]:
-    """R08: ``{var}`` set in Location ≡ Parameters key set, both directions.
+    """R08: ``{var}`` set in Location ∪ directive paths ≡ Parameters, both ways.
 
-    Undeclared Location variables and declared-but-unused Parameters each
-    yield their own violation naming the variable.
+    Undeclared variables and declared-but-unused Parameters each yield their
+    own violation naming the variable. For http-payload structures the route
+    surface lives in directive paths, not the urn Location — a parameter is
+    "used" if it appears in either.
     """
 
     severity = severity_of("R08")
+    directive_vars: dict = {}
+    for _comp, _io, key, directive in directive_edges(corpus.components()):
+        directive_vars.setdefault(key, set()).update(_VAR_RE.findall(directive))
     out: list[Violation] = []
     for name, doc in corpus.structures().items():
         location = doc.get("Location")
@@ -257,7 +262,7 @@ def parameter_closure(corpus: Corpus) -> list[Violation]:
         params = doc.get("Parameters")
         if not isinstance(params, dict):
             params = {}
-        used = set(_VAR_RE.findall(location))
+        used = set(_VAR_RE.findall(location)) | directive_vars.get(name, set())
         declared = set(params)
         for var in sorted(used - declared):
             out.append(

@@ -104,9 +104,13 @@ Definition:
           additionalProperties:
             anyOf:
               - type: array
-                items: {type: string, minLength: 1}
+                items: {type: string, minLength: 1, pattern: '^[A-Za-z0-9._:\-]+$'}
               - type: string
                 pattern: '^(GET|POST|PUT|DELETE|PATCH) /[^ ?#]*$'
+              - type: array
+                minItems: 1
+                uniqueItems: true
+                items: {type: string, pattern: '^(GET|POST|PUT|DELETE|PATCH) /[^ ?#]*$'}
 
   Invariants:
     - Id: R01
@@ -140,7 +144,7 @@ Definition:
     - Id: R08
       OnViolation: fail
       Scope: structure
-      Statement: "Location 中每个模板变量必须在 Parameters 声明;Parameters 每个声明必须出现在 Location 中"
+      Statement: "Location 中每个模板变量必须在 Parameters 声明;Parameters 每个声明必须出现在 Location 或该结构任一指令路径中(http 载荷结构的路面在指令路径,urn Location 只是身份)"
     - Id: R09
       OnViolation: fail
       Scope: structure × structure
@@ -218,7 +222,7 @@ Definition:
     NodeSyntax:
       Kind: [组件名, "external:源名"]
       EmptyList: 值为空列表表示对端为文件本身——结构经自身Location落盘/读回,无进程对端
-      HttpDirective: "值为 'METHOD /path' 字符串时为 http 边——service 上是声明(路由表面,可无消费者),非 service 上是认领(必须归位到恰一个 service 的反方向同键同指令声明);请求体=发出方 Downstream,响应=流入方 Upstream;动词权威在指令,结构不带动词;同一 service 同 (键,指令) 可同挂两方向(双向载荷,如 PUT /config);path {var} 须在键结构 Parameters 声明且 Type 指向 scalar;query 参数不建模(留行为测试)"
+      HttpDirective: "值为 'METHOD /path' 字符串或其非空列表(同一结构在同图内服务多条指令)时为 http 边——service 上是声明(路由表面,可无消费者),非 service 上是认领(必须归位到恰一个 service 的反方向同键同指令声明,列表逐项归位);请求体=发出方 Downstream,响应=流入方 Upstream;动词权威在指令,结构不带动词;同一 service 同 (键,指令) 可同挂两方向(双向载荷,如 PUT /config);path {var} 须在键结构 Parameters 声明且 Type 指向 scalar;query 参数不建模(留行为测试);节点表与指令表不得混装(混合值不过 Shapes)"
     HttpEnvelope:
       ReservedName: ErrorEnvelope
       Note: 保留名结构,隐式适用于全部 http 路由的错误响应形状(如 {error:{code,message}});R04 豁免、R13 强制样本对;不逐路由挂边——与具体路由的接线由消费方活体 harness 执法

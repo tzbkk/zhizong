@@ -53,6 +53,21 @@ def is_directive(value: Any) -> bool:
     return isinstance(value, str) and DIRECTIVE_RE.match(value) is not None
 
 
+def is_directive_list(value: Any) -> bool:
+    """True for a non-empty list whose every item is a directive string.
+
+    Empty lists stay node-lists (``Feed: []`` is a file endpoint, not a
+    directive list); mixed node/directive lists match no Shapes arm and
+    are reported by the shape layer before any rule sees them.
+    """
+
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(is_directive(item) for item in value)
+    )
+
+
 def directive_edges(
     components: dict,
 ) -> Iterator[tuple[Any, str, Any, str]]:
@@ -60,8 +75,8 @@ def directive_edges(
 
     Deterministic (sorted by component repr, fixed Upstream/Downstream
     order, dict insertion order within a map). Non-dict io maps and
-    non-directive values are skipped; shape-invalid strings are the
-    shape layer's findings.
+    non-directive values are skipped; directive lists flatten one edge
+    per item; shape-invalid strings are the shape layer's findings.
     """
 
     for name, doc in sorted(components.items(), key=lambda kv: repr(kv[0])):
@@ -74,6 +89,9 @@ def directive_edges(
             for key, value in io_map.items():
                 if is_directive(value):
                     yield name, io_field, key, value
+                elif is_directive_list(value):
+                    for directive in value:
+                        yield name, io_field, key, directive
 
 
 def directive_referenced_structures(components: dict) -> set:
@@ -100,7 +118,10 @@ def _component_edges(components: dict) -> Iterator[tuple[Any, str, Any, list]]:
             if not isinstance(io_map, dict):
                 continue
             for key, nodes in io_map.items():
-                yield name, io_field, key, nodes if isinstance(nodes, list) else []
+                if is_directive_list(nodes):
+                    yield name, io_field, key, []
+                else:
+                    yield name, io_field, key, nodes if isinstance(nodes, list) else []
 
 
 @rule("R01")

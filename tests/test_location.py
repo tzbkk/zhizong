@@ -329,6 +329,46 @@ def test_r07_unresolved_claims_are_r03s_job(tmp_path):
     assert http_directive_wiring(load_corpus(tmp_path)) == []
 
 
+def test_r07_directive_list_one_key_many_paths_passes(tmp_path):
+    write(
+        tmp_path,
+        "launcher",
+        service(
+            "launcher",
+            downstream={
+                "Status": [
+                    "GET /targets/{target}",
+                    "POST /targets/{target}/start",
+                    "POST /targets/{target}/stop",
+                ]
+            },
+        ),
+    )
+    write(
+        tmp_path,
+        "status",
+        structure("Status", None, parameters={"target": {"Type": "TargetName"}}),
+    )
+
+    assert http_directive_wiring(load_corpus(tmp_path)) == []
+
+
+def test_r07_same_directive_two_keys_still_rejected_with_lists(tmp_path):
+    write(
+        tmp_path,
+        "svc",
+        service(
+            "svc",
+            downstream={"A": ["GET /x", "GET /y"], "B": ["GET /x"]},
+        ),
+    )
+    write(tmp_path, "a", structure("A", None))
+    write(tmp_path, "b", structure("B", None))
+
+    violations = http_directive_wiring(load_corpus(tmp_path))
+    assert any(v.rule_id == "R07" for v in violations)
+
+
 def test_r07_missing_structure_key_left_to_r20(tmp_path):
     write(
         tmp_path,

@@ -164,6 +164,38 @@ def test_shape_directive_value_accepted_in_io_map():
     assert shapes.validate_shapes(corpus) == []
 
 
+def test_shape_directive_list_accepted_in_io_map():
+    doc = base_component()
+    doc["Downstream"] = {"Status": ["GET /targets/{target}", "POST /targets/{target}/start"]}
+    corpus = make_corpus(system_doc(), base_structure(), doc)
+
+    assert shapes.validate_shapes(corpus) == []
+
+
+def test_shape_mixed_node_directive_list_rejected():
+    doc = base_component()
+    doc["Upstream"] = {"Bad": ["GET /a", "external:qq-api"]}
+    corpus = make_corpus(system_doc(), base_structure(), doc)
+
+    assert shapes.validate_shapes(corpus) != []
+
+
+def test_shape_duplicate_directive_in_list_rejected():
+    doc = base_component()
+    doc["Upstream"] = {"Dup": ["GET /a", "GET /a"]}
+    corpus = make_corpus(system_doc(), base_structure(), doc)
+
+    assert shapes.validate_shapes(corpus) != []
+
+
+def test_shape_node_list_item_with_space_rejected():
+    doc = base_component()
+    doc["Upstream"] = {"Feed": ["bad node"]}
+    corpus = make_corpus(system_doc(), base_structure(), doc)
+
+    assert shapes.validate_shapes(corpus) != []
+
+
 def test_shape_lowercase_verb_string_rejected():
     doc = base_component()
     doc["Upstream"] = {"Job": "get /archive/jobs"}

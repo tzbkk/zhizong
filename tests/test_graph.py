@@ -9,8 +9,11 @@ Parameters as {param: {Type: <structure name>}}.
 """
 
 from zhizong.graph import (
+    _component_edges,
+    directive_edges,
     directive_referenced_structures,
     is_directive,
+    is_directive_list,
     r01_edge_symmetry,
     r02_nodes_exist,
     r03_upstream_needs_downstream_counterpart,
@@ -452,6 +455,40 @@ def test_directive_referenced_structures_collects_keys():
     assert directive_referenced_structures({"svc": svc}) == {"Req", "Resp", "List"}
 
 
+def test_is_directive_list_boundary_semantics():
+    assert is_directive_list(["GET /a", "POST /a/b"])
+    assert not is_directive_list([])
+    assert not is_directive_list(["GET /a", "external:qq-api"])
+    assert not is_directive_list("GET /a")
+    assert not is_directive_list([["GET /a"]])
+
+
+def test_directive_edges_flatten_lists():
+    svc = component(
+        "svc",
+        ComponentType="service",
+        Binds="127.0.0.1:9423",
+        Upstream={"Feed": [], "Status": ["GET /s/{t}", "POST /s/{t}/go"]},
+    )
+    edges = {(io, key, d) for _n, io, key, d in directive_edges({"svc": svc})}
+    assert edges == {
+        ("Upstream", "Status", "GET /s/{t}"),
+        ("Upstream", "Status", "POST /s/{t}/go"),
+    }
+
+
+def test_component_edges_yield_empty_nodes_for_directive_lists():
+    svc = component(
+        "svc",
+        ComponentType="service",
+        Binds="127.0.0.1:9423",
+        Upstream={"Feed": [], "Status": ["GET /s"]},
+    )
+    edges = {(io, key): nodes for _n, io, key, nodes in _component_edges({"svc": svc})}
+    assert edges[("Upstream", "Status")] == []
+    assert edges[("Upstream", "Feed")] == []
+
+
 # ------------------------------ R03 directive claims (hard-role rule)
 
 
@@ -466,6 +503,37 @@ def test_r03_claim_resolves_against_opposite_direction_declaration():
         structure("Job"),
     ]
     assert r03_upstream_needs_downstream_counterpart(make_corpus(*docs)) == []
+
+
+def test_r03_claim_list_resolves_per_item():
+    docs = [
+        service_doc(
+            "launcher",
+            Downstream={"Status": ["GET /targets/{target}", "POST /targets/{target}/start"]},
+        ),
+        component(
+            "tui",
+            ComponentType="tui",
+            Upstream={"Status": ["GET /targets/{target}", "POST /targets/{target}/start"]},
+        ),
+        structure("Status"),
+    ]
+    assert r03_upstream_needs_downstream_counterpart(make_corpus(*docs)) == []
+
+
+def test_r03_claim_list_partial_match_rejected():
+    docs = [
+        service_doc("launcher", Downstream={"Status": ["GET /targets/{target}"]}),
+        component(
+            "tui",
+            ComponentType="tui",
+            Upstream={"Status": ["GET /targets/{target}", "POST /targets/{target}/stop"]},
+        ),
+        structure("Status"),
+    ]
+    violations = r03_upstream_needs_downstream_counterpart(make_corpus(*docs))
+    assert len(violations) == 1
+    assert violations[0].rule_id == "R03"
 
 
 def test_r03_request_claim_resolves_against_service_upstream():
